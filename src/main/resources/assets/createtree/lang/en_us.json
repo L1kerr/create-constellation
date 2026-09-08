@@ -1,0 +1,23 @@
+{
+  "key.categories.createtree": "Create Progression Tree",
+  "key.createtree.open_tree": "Open Skill Tree",
+  "screen.createtree.title": "Create Skill Tree",
+  "screen.createtree.points": "Skill Points: %s",
+  "screen.createtree.exp": "EXP: %s / %s to next point",
+  "screen.createtree.cost": "Cost: %s pts, +%s EXP per craft",
+  "screen.createtree.unlocked": "Unlocked",
+  "screen.createtree.click_to_unlock": "Click to unlock",
+  "screen.createtree.requires_any": "Locked: unlock any connected node above first",
+  "screen.createtree.root": "Progression root - unlock branches below",
+  "screen.createtree.hint": "Click node: unlock - Click planet: follow - Click Sun: overview - Drag/Wheel: free cam - C: back to Sun - Esc: close",
+  "category.createtree.light": "Light (1 pt)",
+  "category.createtree.medium": "Medium (2 pts)",
+  "category.createtree.complex": "Complex (3 pts)",
+  "branch.createtree.create": "Create Sun",
+  "branch.createtree.fluids": "Fluids",
+  "branch.createtree.logistics": "Logistics",
+  "branch.createtree.contraptions": "Contraptions",
+  "message.createtree.locked": "Craft locked: unlock %s in the Skill Tree (press I)",
+  "message.createtree.unlocked": "Unlocked %s in the Skill Tree",
+  "message.createtree.not_enough_points": "Not enough skill points"
+}

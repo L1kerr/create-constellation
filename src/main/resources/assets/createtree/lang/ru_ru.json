@@ -1,0 +1,23 @@
+{
+  "key.categories.createtree": "Create Progression Tree",
+  "key.createtree.open_tree": "Открыть древо прокачки",
+  "screen.createtree.title": "Древо навыков Create",
+  "screen.createtree.points": "Очки прокачки: %s",
+  "screen.createtree.exp": "EXP: %s / %s до следующего очка",
+  "screen.createtree.cost": "Цена: %s очк., +%s EXP за крафт",
+  "screen.createtree.unlocked": "Разблокировано",
+  "screen.createtree.click_to_unlock": "Нажмите, чтобы разблокировать",
+  "screen.createtree.requires_any": "Закрыто: сначала откройте любой связанный узел выше",
+  "screen.createtree.root": "Корень прогрессии - ветки открываются ниже",
+  "screen.createtree.hint": "Клик по узлу: открыть - Клик по планете: следовать - Клик по Солнцу: обзор - Перетаскивание/колесо: свободная камера - C: к Солнцу - Esc: закрыть",
+  "category.createtree.light": "Лёгкий (1 очко)",
+  "category.createtree.medium": "Средний (2 очка)",
+  "category.createtree.complex": "Сложный (3 очка)",
+  "branch.createtree.create": "Солнце Create",
+  "branch.createtree.fluids": "Жидкости",
+  "branch.createtree.logistics": "Логистика",
+  "branch.createtree.contraptions": "Механизмы",
+  "message.createtree.locked": "Крафт заблокирован: разблокируйте %s в древе навыков (клавиша I)",
+  "message.createtree.unlocked": "Разблокировано: %s",
+  "message.createtree.not_enough_points": "Недостаточно очков прокачки"
+}

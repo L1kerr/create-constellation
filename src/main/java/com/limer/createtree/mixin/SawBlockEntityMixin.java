@@ -1,0 +1,60 @@
+package com.limer.createtree.mixin;
+
+import java.util.List;
+
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import com.limer.createtree.common.GateHelper;
+import com.simibubi.create.content.kinetics.saw.SawBlockEntity;
+import com.simibubi.create.content.processing.recipe.ProcessingInventory;
+
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.Recipe;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.level.block.entity.BlockEntity;
+
+/**
+ * Gates the Mechanical Saw: if the cutting output is locked, applyRecipe is cancelled.
+ * The caller still marks the inventory as processed, so the input item is pushed through
+ * unchanged instead of being consumed - no items are lost.
+ */
+@Mixin(value = SawBlockEntity.class, remap = false)
+public abstract class SawBlockEntityMixin extends BlockEntity {
+
+	@Shadow
+	private int recipeIndex;
+
+	@Shadow
+	public ProcessingInventory inventory;
+
+	@Shadow
+	private List<RecipeHolder<? extends Recipe<?>>> getRecipes() {
+		throw new AssertionError();
+	}
+
+	protected SawBlockEntityMixin() {
+		super(null, null, null);
+	}
+
+	@Inject(method = "applyRecipe", at = @At("HEAD"), cancellable = true)
+	private void createtree$blockLocked(CallbackInfo ci) {
+		if (this.level == null || this.level.isClientSide)
+			return;
+		List<RecipeHolder<? extends Recipe<?>>> recipes = getRecipes();
+		if (recipes.isEmpty())
+			return;
+		int index = Math.min(recipeIndex, recipes.size() - 1);
+		Recipe<?> recipe = recipes.get(index).value();
+		ItemStack result = recipe.getResultItem(this.level.registryAccess());
+		if (GateHelper.isBlocked(this, result)) {
+			ci.cancel();
+		} else {
+			int rolls = Math.max(1, inventory.getStackInSlot(0).getCount());
+			GateHelper.awardExp(this, result, rolls);
+		}
+	}
+}

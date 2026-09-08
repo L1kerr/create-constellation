@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "package": "com.limer.createtree.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "minVersion": "0.8.7",
+  "refmap": "createtree.refmap.json",
+  "mixins": [
+    "BasinOperatingBlockEntityMixin",
+    "MechanicalPressBlockEntityMixin",
+    "MechanicalCrafterBlockEntityMixin",
+    "SawBlockEntityMixin",
+    "CrushingWheelControllerBlockEntityMixin",
+    "ResultSlotMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

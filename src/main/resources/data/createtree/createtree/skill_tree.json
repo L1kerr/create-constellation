@@ -1,0 +1,57 @@
+{
+  "exp_per_point": 100,
+  "starting_points": 2,
+  "entries": [
+    { "item": "create:andesite_alloy", "category": "light" },
+    { "item": "create:shaft", "category": "light" },
+    { "item": "create:cogwheel", "category": "light" },
+    { "item": "create:large_cogwheel", "category": "light" },
+    { "item": "create:belt_connector", "category": "light" },
+    { "item": "create:copper_sheet", "category": "light", "exp": 8 },
+    { "item": "create:iron_sheet", "category": "light", "exp": 8 },
+    { "item": "create:golden_sheet", "category": "light", "exp": 8 },
+    { "item": "create:crushed_raw_iron", "category": "light", "exp": 6 },
+
+    { "item": "create:brass_ingot", "category": "medium", "exp": 15 },
+    { "item": "create:brass_sheet", "category": "medium", "exp": 14 },
+    { "item": "create:rose_quartz", "category": "medium", "exp": 15 },
+    { "item": "create:polished_rose_quartz", "category": "medium", "exp": 12 },
+    { "item": "create:electron_tube", "category": "medium", "exp": 18 },
+    { "item": "create:propeller", "category": "medium", "exp": 14 },
+    { "item": "create:whisk", "category": "medium", "exp": 14 },
+    { "item": "create:redstone_link", "category": "medium", "exp": 16 },
+    { "item": "create:mechanical_press", "category": "medium", "exp": 20 },
+    { "item": "create:mechanical_mixer", "category": "medium", "exp": 20 },
+    { "item": "create:mechanical_crafter", "category": "medium", "exp": 20 },
+    { "item": "create:deployer", "category": "medium", "exp": 20 },
+    { "item": "create:super_glue", "category": "medium", "exp": 12 },
+
+    { "item": "create:brass_hand", "category": "complex", "exp": 30 },
+    { "item": "create:precision_mechanism", "category": "complex", "exp": 40 },
+    { "item": "create:flywheel", "category": "complex", "exp": 35 },
+    { "item": "create:encased_chain_drive", "category": "complex", "exp": 28 },
+    { "item": "create:blaze_cake", "category": "complex", "exp": 45 },
+
+    { "item": "create:fluid_pipe", "category": "light", "branch": "fluids", "exp": 6 },
+    { "item": "create:mechanical_pump", "category": "medium", "branch": "fluids", "exp": 15 },
+    { "item": "create:hose_pulley", "category": "medium", "branch": "fluids", "exp": 15 },
+    { "item": "create:fluid_tank", "category": "medium", "branch": "fluids", "exp": 14 },
+    { "item": "create:spout", "category": "medium", "branch": "fluids", "exp": 16 },
+
+    { "item": "create:chute", "category": "light", "branch": "logistics", "exp": 6 },
+    { "item": "create:smart_chute", "category": "medium", "branch": "logistics", "exp": 14 },
+    { "item": "create:andesite_funnel", "category": "light", "branch": "logistics", "exp": 6 },
+    { "item": "create:brass_funnel", "category": "medium", "branch": "logistics", "exp": 14 },
+    { "item": "create:depot", "category": "light", "branch": "logistics", "exp": 6 },
+    { "item": "create:weighted_ejector", "category": "medium", "branch": "logistics", "exp": 16 },
+    { "item": "create:mechanical_arm", "category": "complex", "branch": "logistics", "exp": 30 },
+
+    { "item": "create:rope_pulley", "category": "medium", "branch": "contraptions", "exp": 14 },
+    { "item": "create:cart_assembler", "category": "complex", "branch": "contraptions", "exp": 28 },
+    { "item": "create:gantry_shaft", "category": "medium", "branch": "contraptions", "exp": 14 },
+    { "item": "create:mechanical_bearing", "category": "medium", "branch": "contraptions", "exp": 16 },
+    { "item": "create:mechanical_drill", "category": "medium", "branch": "contraptions", "exp": 16 },
+    { "item": "create:steam_engine", "category": "complex", "branch": "contraptions", "exp": 40 },
+    { "item": "create:steam_whistle", "category": "light", "branch": "contraptions", "exp": 8 }
+  ]
+}
