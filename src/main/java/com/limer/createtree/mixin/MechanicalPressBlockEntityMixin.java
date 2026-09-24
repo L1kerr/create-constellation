@@ -1,6 +1,5 @@
 package com.limer.createtree.mixin;
 
-import java.util.List;
 import java.util.Optional;
 
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,11 +16,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
-/**
- * Gates the press in world / belt mode (basin mode is handled by BasinOperatingBlockEntityMixin):
- *  - getRecipe returns empty for locked outputs, so nothing is pressed.
- *  - onItemPressed awards EXP for the pressed result.
- */
 @Mixin(value = MechanicalPressBlockEntity.class, remap = false)
 public abstract class MechanicalPressBlockEntityMixin extends BlockEntity {
 
@@ -34,19 +28,14 @@ public abstract class MechanicalPressBlockEntityMixin extends BlockEntity {
 		Optional<RecipeHolder<PressingRecipe>> recipe = cir.getReturnValue();
 		if (recipe.isEmpty() || this.level == null)
 			return;
-		for (ItemStack result : createtree$resultsOf(recipe.get()))
-			if (GateHelper.isBlocked(this, result)) {
-				cir.setReturnValue(Optional.empty());
-				return;
-			}
+		RecipeHolder<PressingRecipe> holder = recipe.get();
+
+		if (GateHelper.isBlockedHolder(this, holder))
+			cir.setReturnValue(Optional.empty());
 	}
 
 	@Inject(method = "onItemPressed", at = @At("HEAD"))
 	private void createtree$awardExp(ItemStack result, CallbackInfo ci) {
 		GateHelper.awardExp(this, result);
-	}
-
-	private List<ItemStack> createtree$resultsOf(RecipeHolder<PressingRecipe> holder) {
-		return holder.value().getRollableResultsAsItemStacks();
 	}
 }

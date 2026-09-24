@@ -10,10 +10,9 @@ import net.minecraft.resources.ResourceLocation;
 
 import com.limer.createtree.CreateTreeMod;
 
-/**
- * Server -> client: player's progression state (unlocks, exp, points).
- */
-public record ProgressSyncPayload(List<ResourceLocation> unlocked, int exp, int points, int expPerPoint)
+public record ProgressSyncPayload(List<ResourceLocation> unlocked, int exp, int points, int expPerPoint,
+								  boolean sunIgnited, ResourceLocation contractItem, int contractTarget,
+								  int contractProgress, int contractReward)
 	implements CustomPacketPayload {
 
 	public static final CustomPacketPayload.Type<ProgressSyncPayload> TYPE =
@@ -27,7 +26,20 @@ public record ProgressSyncPayload(List<ResourceLocation> unlocked, int exp, int 
 				List<ResourceLocation> list = new ArrayList<>(count);
 				for (int i = 0; i < count; i++)
 					list.add(ResourceLocation.STREAM_CODEC.decode(buf));
-				return new ProgressSyncPayload(list, buf.readVarInt(), buf.readVarInt(), buf.readVarInt());
+				int exp = buf.readVarInt();
+				int points = buf.readVarInt();
+				int epp = buf.readVarInt();
+				boolean ignited = buf.readBoolean();
+				boolean hasContract = buf.readBoolean();
+				ResourceLocation item = null;
+				int target = 0, prog = 0, reward = 0;
+				if (hasContract) {
+					item = ResourceLocation.STREAM_CODEC.decode(buf);
+					target = buf.readVarInt();
+					prog = buf.readVarInt();
+					reward = buf.readVarInt();
+				}
+				return new ProgressSyncPayload(list, exp, points, epp, ignited, item, target, prog, reward);
 			}
 
 			@Override
@@ -38,12 +50,22 @@ public record ProgressSyncPayload(List<ResourceLocation> unlocked, int exp, int 
 				buf.writeVarInt(payload.exp());
 				buf.writeVarInt(payload.points());
 				buf.writeVarInt(payload.expPerPoint());
+				buf.writeBoolean(payload.sunIgnited());
+				buf.writeBoolean(payload.contractItem() != null);
+				if (payload.contractItem() != null) {
+					ResourceLocation.STREAM_CODEC.encode(buf, payload.contractItem());
+					buf.writeVarInt(payload.contractTarget());
+					buf.writeVarInt(payload.contractProgress());
+					buf.writeVarInt(payload.contractReward());
+				}
 			}
 		};
 
 	public ProgressSyncPayload(com.limer.createtree.data.PlayerProgress progress) {
 		this(new ArrayList<>(progress.unlocked()), progress.exp(), progress.points(),
-			com.limer.createtree.config.SkillTrees.get().expPerPoint());
+			com.limer.createtree.config.SkillTrees.get().expPerPoint(), progress.sunIgnited(),
+			progress.contract().isEmpty() ? null : progress.contract().item(),
+			progress.contract().target(), progress.contract().progress(), progress.contract().reward());
 	}
 
 	@Override

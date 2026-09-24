@@ -1,6 +1,8 @@
 package com.limer.createtree.data;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import net.minecraft.nbt.CompoundTag;
@@ -11,19 +13,31 @@ import net.minecraft.resources.ResourceLocation;
 
 import net.neoforged.neoforge.common.util.INBTSerializable;
 
-/**
- * Server-side progression state for one player.
- * Stored as a serializable data attachment on the player entity, so it persists with the world.
- * Not synced automatically; explicit payload sync is used instead.
- */
 public class PlayerProgress implements INBTSerializable<CompoundTag> {
 
 	private final Set<ResourceLocation> unlocked = new HashSet<>();
+	private final Map<ResourceLocation, Integer> craftCounts = new HashMap<>();
+	private final Contract contract = new Contract();
 	private int exp = 0;
 	private int points = 0;
 	private boolean initialized = false;
+	private boolean sunIgnited = false;
 
-	/** Grants starting points once, on the player's first join. */
+	public Contract contract() {
+		return contract;
+	}
+
+	public boolean sunIgnited() {
+		return sunIgnited;
+	}
+
+	public boolean ignite() {
+		if (sunIgnited)
+			return false;
+		sunIgnited = true;
+		return true;
+	}
+
 	public void ensureInitialized(int startingPoints) {
 		if (!initialized) {
 			initialized = true;
@@ -51,10 +65,32 @@ public class PlayerProgress implements INBTSerializable<CompoundTag> {
 		return points;
 	}
 
-	/**
-	 * Adds EXP and converts whole multiples of expPerPoint into skill points.
-	 * @return true if the point balance changed (a new point was earned).
-	 */
+	public int craftCount(ResourceLocation item) {
+		return craftCounts.getOrDefault(item, 0);
+	}
+
+	public double registerCrafts(ResourceLocation item, int times) {
+		if (item == null || times <= 0)
+			return 1.0;
+		int before = craftCounts.getOrDefault(item, 0);
+		craftCounts.put(item, before + times);
+
+		double sum = 0;
+		for (int c = before; c < before + times; c++)
+			sum += tierMultiplier(c);
+		return sum / times;
+	}
+
+	private static double tierMultiplier(int craftsBefore) {
+		if (craftsBefore < 10)
+			return 1.0;
+		if (craftsBefore < 30)
+			return 0.5;
+		if (craftsBefore < 60)
+			return 0.25;
+		return 0.05;
+	}
+
 	public boolean addExp(int amount, int expPerPoint) {
 		if (amount <= 0)
 			return false;
@@ -70,10 +106,6 @@ public class PlayerProgress implements INBTSerializable<CompoundTag> {
 		return changed;
 	}
 
-	/**
-	 * Spends points to unlock an item.
-	 * @return true if unlocked now, false if already unlocked or not enough points.
-	 */
 	public boolean tryUnlock(ResourceLocation item, int cost) {
 		if (item == null || unlocked.contains(item))
 			return false;
@@ -90,10 +122,16 @@ public class PlayerProgress implements INBTSerializable<CompoundTag> {
 		tag.putInt("Exp", exp);
 		tag.putInt("Points", points);
 		tag.putBoolean("Init", initialized);
+		tag.putBoolean("Ignited", sunIgnited);
+		tag.put("Contract", contract.save());
 		ListTag list = new ListTag();
 		for (ResourceLocation rl : unlocked)
 			list.add(StringTag.valueOf(rl.toString()));
 		tag.put("Unlocked", list);
+		CompoundTag crafts = new CompoundTag();
+		for (Map.Entry<ResourceLocation, Integer> e : craftCounts.entrySet())
+			crafts.putInt(e.getKey().toString(), e.getValue());
+		tag.put("CraftCounts", crafts);
 		return tag;
 	}
 
@@ -103,6 +141,8 @@ public class PlayerProgress implements INBTSerializable<CompoundTag> {
 		exp = tag.getInt("Exp");
 		points = tag.getInt("Points");
 		initialized = tag.getBoolean("Init");
+		sunIgnited = tag.getBoolean("Ignited");
+		contract.load(tag.getCompound("Contract"));
 		ListTag list = tag.getList("Unlocked", Tag.TAG_STRING);
 		for (int i = 0; i < list.size(); i++) {
 			try {
@@ -110,13 +150,62 @@ public class PlayerProgress implements INBTSerializable<CompoundTag> {
 			} catch (Exception ignored) {
 			}
 		}
+		craftCounts.clear();
+		CompoundTag crafts = tag.getCompound("CraftCounts");
+		for (String key : crafts.getAllKeys()) {
+			try {
+				craftCounts.put(ResourceLocation.parse(key), crafts.getInt(key));
+			} catch (Exception ignored) {
+			}
+		}
 	}
 
-	/** Copy state into this instance (used when respawning with copyOnDeath). */
 	public void copyFrom(PlayerProgress other) {
 		this.unlocked.clear();
 		this.unlocked.addAll(other.unlocked);
+		this.craftCounts.clear();
+		this.craftCounts.putAll(other.craftCounts);
+		this.contract.copyFrom(other.contract);
 		this.exp = other.exp;
 		this.points = other.points;
+		this.initialized = other.initialized;
+		this.sunIgnited = other.sunIgnited;
+	}
+
+	public void addPoints(int amount) {
+		points = Math.max(0, points + amount);
+	}
+
+	public void setPoints(int amount) {
+		points = Math.max(0, amount);
+	}
+
+	public void softReset(int startingPoints) {
+		unlocked.clear();
+		exp = 0;
+		points = Math.max(0, startingPoints);
+	}
+
+	public void hardReset() {
+		unlocked.clear();
+		craftCounts.clear();
+		exp = 0;
+		points = 0;
+		initialized = false;
+		sunIgnited = false;
+	}
+
+	public void forceUnlock(ResourceLocation item) {
+		if (item != null)
+			unlocked.add(item);
+	}
+
+	public void forceUnlockAll(java.util.Collection<ResourceLocation> items) {
+		if (items != null)
+			unlocked.addAll(items);
+	}
+
+	public void forceLock(ResourceLocation item) {
+		unlocked.remove(item);
 	}
 }

@@ -15,19 +15,6 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 
-/**
- * Loads the skill tree JSON from datapacks:
- * data/<namespace>/createtree/*.json
- *
- * Format:
- * {
- *   "exp_per_point": 100,
- *   "entries": [
- *     { "item": "create:shaft", "category": "light" },
- *     { "item": "create:precision_mechanism", "category": "complex", "cost": 5, "exp": 40 }
- *   ]
- * }
- */
 public class SkillTreeLoader extends SimpleJsonResourceReloadListener {
 
 	private static final Gson GSON = new GsonBuilder().create();
@@ -66,23 +53,44 @@ public class SkillTreeLoader extends SimpleJsonResourceReloadListener {
 						CreateTreeMod.LOGGER.warn("Skill tree entry {} in {} is missing item/category, skipping", obj, file.getKey());
 						continue;
 					}
-					ResourceLocation item;
-					try {
-						item = ResourceLocation.parse(obj.get("item").getAsString());
-					} catch (Exception e) {
-						CreateTreeMod.LOGGER.warn("Invalid item id '{}' in {}, skipping", obj.get("item").getAsString(), file.getKey());
-						continue;
+				ResourceLocation item;
+				try {
+					item = ResourceLocation.parse(obj.get("item").getAsString());
+				} catch (Exception e) {
+					CreateTreeMod.LOGGER.warn("Invalid item id '{}' in {}, skipping", obj.get("item").getAsString(), file.getKey());
+					continue;
+				}
+
+				List<ResourceLocation> unlocks = new ArrayList<>();
+				if (obj.has("unlocks") && obj.get("unlocks").isJsonArray()) {
+					for (JsonElement u : obj.getAsJsonArray("unlocks")) {
+						if (!u.isJsonPrimitive())
+							continue;
+						try {
+							ResourceLocation uid = ResourceLocation.parse(u.getAsString());
+							if (!unlocks.contains(uid))
+								unlocks.add(uid);
+						} catch (Exception e) {
+							CreateTreeMod.LOGGER.warn("Invalid unlocks id '{}' for {} in {}", u.getAsString(), item, file.getKey());
+						}
 					}
+				}
 					Category category = Category.byJsonName(obj.get("category").getAsString());
 					if (category == null) {
 						CreateTreeMod.LOGGER.warn("Unknown category '{}' for item {} in {}, skipping",
 							obj.get("category").getAsString(), item, file.getKey());
 						continue;
 					}
-					int cost = obj.has("cost") ? Math.max(0, obj.get("cost").getAsInt()) : category.defaultCost();
-					int exp = obj.has("exp") ? Math.max(0, obj.get("exp").getAsInt()) : category.defaultExp();
-					String branch = obj.has("branch") ? obj.get("branch").getAsString() : SkillEntry.MAIN_BRANCH;
-					entries.add(new SkillEntry(item, category, cost, exp, branch));
+
+				if (!net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(item)) {
+					CreateTreeMod.LOGGER.debug("Skill tree: item {} is not registered, skipping", item);
+					continue;
+				}
+				unlocks.removeIf(id -> !net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id));
+				int cost = obj.has("cost") ? Math.max(0, obj.get("cost").getAsInt()) : category.defaultCost();
+				int exp = obj.has("exp") ? Math.max(0, obj.get("exp").getAsInt()) : category.defaultExp();
+				String branch = obj.has("branch") ? obj.get("branch").getAsString() : SkillEntry.MAIN_BRANCH;
+				entries.add(new SkillEntry(item, category, cost, exp, branch, unlocks));
 				}
 			} catch (Exception e) {
 				CreateTreeMod.LOGGER.error("Failed to parse skill tree file {}", file.getKey(), e);

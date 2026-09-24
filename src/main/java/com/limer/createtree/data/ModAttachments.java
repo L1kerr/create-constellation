@@ -8,10 +8,6 @@ import net.neoforged.neoforge.attachment.AttachmentType;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
 
-/**
- * Data attachment holding per-player progression, saved with the player NBT (server-side).
- * copyOnDeath keeps unlocks when the player dies.
- */
 public class ModAttachments {
 
 	public static final DeferredRegister<AttachmentType<?>> REGISTER =

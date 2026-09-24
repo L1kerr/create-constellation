@@ -28,15 +28,15 @@ public class CreateTreeMod {
 	}
 
 	public CreateTreeMod(IEventBus modBus) {
-		// Mod-bus: registries + payload handlers
+
 		ModAttachments.REGISTER.register(modBus);
 		modBus.addListener(ModNetwork::register);
 
-		// Game-bus: gameplay events
 		IEventBus forgeBus = NeoForge.EVENT_BUS;
 		forgeBus.addListener(this::onAddReloadListener);
 		forgeBus.register(CraftEvents.class);
 		forgeBus.register(SyncEvents.class);
+		forgeBus.register(com.limer.createtree.event.ServerTickEvents.class);
 
 		LOGGER.info("Create Progression Tree initializing");
 	}

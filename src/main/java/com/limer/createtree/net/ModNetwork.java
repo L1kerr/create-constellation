@@ -9,9 +9,6 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
-/**
- * Registers all custom payloads and their handlers.
- */
 public final class ModNetwork {
 
 	private ModNetwork() {
@@ -31,6 +28,16 @@ public final class ModNetwork {
 				if (context.player() instanceof ServerPlayer player)
 					SkillApi.unlock(player, payload.item());
 			}));
+
+		registrar.playToClient(EventSyncPayload.TYPE, EventSyncPayload.STREAM_CODEC,
+			(payload, context) -> context.enqueueWork(() -> ClientData.applyEvent(payload)));
+
+		registrar.playToServer(IgnitePayload.TYPE, IgnitePayload.STREAM_CODEC,
+			(payload, context) -> context.enqueueWork(() -> {
+				if (context.player() instanceof ServerPlayer player)
+					SkillApi.ignite(player);
+			}));
+
 	}
 
 	public static void sendToPlayer(ServerPlayer player, CustomPacketPayload payload) {

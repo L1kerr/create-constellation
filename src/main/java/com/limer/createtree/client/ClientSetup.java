@@ -13,9 +13,6 @@ import net.neoforged.neoforge.client.settings.KeyConflictContext;
 
 import org.lwjgl.glfw.GLFW;
 
-/**
- * Keybind to open the skill tree GUI (default: I, works in-game only).
- */
 @EventBusSubscriber(modid = CreateTreeMod.MODID, value = Dist.CLIENT)
 public class ClientSetup {
 

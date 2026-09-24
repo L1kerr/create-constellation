@@ -14,34 +14,40 @@ import com.limer.createtree.config.SkillEntry;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
-/**
- * Client-side cache of the synced tree + progress. Used to render the GUI and to
- * pre-check gating on the client (the server is still authoritative).
- * Not annotated @OnlyIn because the class is referenced from common network code;
- * it only ever holds meaningful data on the client.
- */
 public final class ClientData {
 
 	private ClientData() {
 	}
 
 	private static volatile Map<ResourceLocation, SkillEntry> tree = Map.of();
+
+	private static volatile Map<ResourceLocation, SkillEntry> owners = Map.of();
 	private static volatile Map<Category, List<SkillEntry>> byCategory = new EnumMap<>(Category.class);
 	private static volatile int expPerPoint = 100;
 	private static volatile int exp = 0;
 	private static volatile int points = 0;
 	private static volatile Set<ResourceLocation> unlocked = new HashSet<>();
+	private static volatile boolean sunIgnited = false;
+
+	private static volatile ResourceLocation contractItem = null;
+	private static volatile int contractTarget = 0;
+	private static volatile int contractProgress = 0;
+	private static volatile int contractReward = 0;
 
 	public static void applyTree(TreeSyncPayload payload) {
 		Map<ResourceLocation, SkillEntry> map = new java.util.LinkedHashMap<>();
+		Map<ResourceLocation, SkillEntry> own = new java.util.HashMap<>();
 		Map<Category, List<SkillEntry>> cats = new EnumMap<>(Category.class);
 		for (Category c : Category.values())
 			cats.put(c, new ArrayList<>());
 		for (SkillEntry e : payload.entries()) {
 			map.putIfAbsent(e.item(), e);
 			cats.get(e.category()).add(e);
+			for (ResourceLocation u : e.unlocks())
+				own.put(u, e);
 		}
 		tree = Collections.unmodifiableMap(map);
+		owners = Collections.unmodifiableMap(own);
 		cats.replaceAll((c, l) -> Collections.unmodifiableList(l));
 		byCategory = cats;
 		expPerPoint = payload.expPerPoint();
@@ -53,6 +59,75 @@ public final class ClientData {
 		exp = payload.exp();
 		points = payload.points();
 		expPerPoint = payload.expPerPoint();
+		sunIgnited = payload.sunIgnited();
+		contractItem = payload.contractItem();
+		contractTarget = payload.contractTarget();
+		contractProgress = payload.contractProgress();
+		contractReward = payload.contractReward();
+	}
+
+	public static ResourceLocation contractItem() {
+		return contractItem;
+	}
+
+	public static int contractTarget() {
+		return contractTarget;
+	}
+
+	public static int contractProgress() {
+		return contractProgress;
+	}
+
+	public static int contractReward() {
+		return contractReward;
+	}
+
+	public static boolean sunIgnited() {
+		return sunIgnited;
+	}
+
+	private static volatile int eventType = 0;
+	private static volatile int eventSeconds = 0;
+	private static volatile long eventReceivedAt = 0;
+	private static volatile String goldenBranch = "";
+	private static volatile Map<ResourceLocation, Integer> discounts = Map.of();
+
+	public static void applyEvent(EventSyncPayload payload) {
+		eventType = payload.eventType();
+		eventSeconds = payload.secondsLeft();
+		eventReceivedAt = System.currentTimeMillis();
+		goldenBranch = payload.branch();
+		Map<ResourceLocation, Integer> map = new java.util.HashMap<>();
+		for (int i = 0; i < payload.discountItems().size(); i++)
+			map.put(payload.discountItems().get(i), payload.discountPrices()[i]);
+		discounts = Collections.unmodifiableMap(map);
+	}
+
+	public static int eventType() {
+		return eventSecondsLeft() > 0 ? eventType : 0;
+	}
+
+	public static String goldenBranch() {
+		return eventType() == 1 ? goldenBranch : "";
+	}
+
+	public static int discountPrice(ResourceLocation item) {
+		return eventType() == 2 ? discounts.getOrDefault(item, -1) : -1;
+	}
+
+	public static Map<ResourceLocation, Integer> discounts() {
+		return eventType() == 2 ? discounts : Map.of();
+	}
+
+	public static int eventSecondsLeft() {
+		if (eventSeconds <= 0)
+			return 0;
+		int elapsed = (int) ((System.currentTimeMillis() - eventReceivedAt) / 1000);
+		return Math.max(0, eventSeconds - elapsed);
+	}
+
+	public static void setSunIgnitedLocal() {
+		sunIgnited = true;
 	}
 
 	public static Map<ResourceLocation, SkillEntry> tree() {
@@ -87,7 +162,10 @@ public final class ClientData {
 		return tree.get(item);
 	}
 
-	/** Position of an entry in the config order, -1 when unknown. */
+	public static SkillEntry ownerOf(ResourceLocation item) {
+		return owners.get(item);
+	}
+
 	public static int orderOf(ResourceLocation item) {
 		int i = 0;
 		for (ResourceLocation rl : tree.keySet()) {
@@ -98,7 +176,6 @@ public final class ClientData {
 		return -1;
 	}
 
-	/** Cached solar-system layout; recomputed only when the tree payload changes. */
 	private static volatile com.limer.createtree.common.TreeLayout.Layout layout =
 		com.limer.createtree.common.TreeLayout.compute(List.of());
 
@@ -106,11 +183,15 @@ public final class ClientData {
 		return layout;
 	}
 
-	/** Client-side lock preview for rendering; server is authoritative. */
 	public static boolean isLocked(ItemStack stack) {
 		if (stack == null || stack.isEmpty())
 			return false;
-		SkillEntry e = entry(net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()));
-		return e != null && !isUnlocked(e.item());
+		ResourceLocation id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
+		SkillEntry e = entry(id);
+		if (e != null)
+			return !isUnlocked(e.item());
+
+		SkillEntry owner = owners.get(id);
+		return owner != null && !isUnlocked(owner.item());
 	}
 }

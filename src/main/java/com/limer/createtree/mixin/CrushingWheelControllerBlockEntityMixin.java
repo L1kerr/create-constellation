@@ -18,11 +18,6 @@ import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.items.wrapper.RecipeWrapper;
 
-/**
- * Gates the Crushing Wheels: if the crushing/milling output is locked, applyRecipe is cancelled.
- * appliedRecipe is still set to true by the caller, so the raw input item is ejected unchanged
- * on the next tick - no items are lost.
- */
 @Mixin(value = CrushingWheelControllerBlockEntity.class, remap = false)
 public abstract class CrushingWheelControllerBlockEntityMixin extends BlockEntity {
 

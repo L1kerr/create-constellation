@@ -13,11 +13,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
-/**
- * Gates the Mechanical Crafter: when the computed result is locked, return null so the crafter
- * ejects the grid back to the player (no items lost) instead of completing the craft.
- * EXP is credited to the nearest player for a completed gated craft.
- */
 @Mixin(value = MechanicalCrafterBlockEntity.class, remap = false)
 public abstract class MechanicalCrafterBlockEntityMixin extends BlockEntity {
 
@@ -37,7 +32,7 @@ public abstract class MechanicalCrafterBlockEntityMixin extends BlockEntity {
 		if (result == null)
 			return null;
 		if (GateHelper.isBlocked(this, result))
-			return null; // forces ejectWholeGrid(): items returned, craft blocked
+			return null;
 		GateHelper.awardExp(this, result);
 		return result;
 	}

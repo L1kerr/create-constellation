@@ -40,9 +40,6 @@ configurations.all {
 dependencies {
     implementation 'net.neoforged:neoforge:21.1.233'
 
-    // Create (official/Mojang names) + its JarInJar libraries from ./libs (compile only).
-    // At runtime only the full Create jar is added to the dev environment;
-    // nothing from libs is packaged into the built mod jar.
     compileOnly fileTree(dir: 'libs', include: ['*.jar'])
     runtimeOnly files('libs/create-1.21.1-6.0.10.jar')
 }

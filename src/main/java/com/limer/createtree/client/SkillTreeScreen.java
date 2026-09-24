@@ -13,6 +13,7 @@ import com.limer.createtree.common.TreeLayout;
 import com.limer.createtree.config.Category;
 import com.limer.createtree.config.SkillEntry;
 import com.limer.createtree.net.ClientData;
+import com.limer.createtree.net.IgnitePayload;
 import com.limer.createtree.net.ModNetwork;
 import com.limer.createtree.net.UnlockRequestPayload;
 
@@ -31,18 +32,8 @@ import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 
-/**
- * Progression "constellation" screen (key: I), performance-optimized build.
- *
- * Per-frame budget (instead of tens of thousands of 1px fills):
- *  - links are single rotated quads (1 fill each, PoseStack rotation)
- *  - medallion discs use cached per-radius horizontal span tables
- *  - orbit rings use cached unit-circle point tables, drawn dashed
- *  - world positions, parents and per-frame node states are precomputed
- * Blur is impossible: all background render methods are overridden to no-ops.
- */
+
 public class SkillTreeScreen extends Screen {
 
 	private static final int NODE_R = 17;
@@ -59,29 +50,40 @@ public class SkillTreeScreen extends Screen {
 	private static final int RIM_WAIT = 0xFF4A5066;
 	private static final int RIM_POOR = 0xFF8A4A4A;
 
-	// geometry caches keyed by integer radius
+
 	private static final Map<Integer, int[]> DISC_CACHE = new HashMap<>();
 	private static final Map<Integer, int[][]> RING_CACHE = new HashMap<>();
 
 	private final List<Node> nodes = new ArrayList<>();
 	private final List<float[]> stars = new ArrayList<>();
 	private final List<Spark> sparks = new ArrayList<>();
-	private final ItemStack rootIcon = new ItemStack(Items.NETHER_STAR);
 
-	// precomputed layout; slot 0 = root, node i lives at slot i+1
+	private final ItemStack rootIcon = new ItemStack(com.simibubi.create.AllItems.WRENCH.get());
+
+	private final ItemStack aeroRootIcon = makeAeroIcon();
+
+	private static ItemStack makeAeroIcon() {
+		net.minecraft.world.item.Item item = BuiltInRegistries.ITEM.get(
+			ResourceLocation.fromNamespaceAndPath("aeronautics", "aviators_goggles"));
+		return item == null ? ItemStack.EMPTY : new ItemStack(item);
+	}
+
+
 	private TreeLayout.Layout layout = new TreeLayout.Layout();
 	private float[] worldX = new float[1];
 	private float[] worldY = new float[1];
 	private int[][] parents = new int[0][];
-	/** planet centers, recomputed per frame (planets orbit the Sun) */
+	
 	private float[] planetCX = new float[0];
 	private float[] planetCY = new float[0];
 	private Component[] planetNames = new Component[0];
 
-	// per-frame caches
+
 	private float[] scrX = new float[1];
 	private float[] scrY = new float[1];
 	private boolean[] stUnlocked = new boolean[0];
+	
+	private boolean[] branchComplete = new boolean[0];
 	private boolean[] stParentsOk = new boolean[0];
 	private boolean[] stAffordable = new boolean[0];
 
@@ -92,18 +94,34 @@ public class SkillTreeScreen extends Screen {
 	private boolean dragging = false;
 	private Set<ResourceLocation> lastUnlocked = null;
 
-	// camera focus: -2 = free, -1 = Sun (overview), k >= 0 = follow planet k
+
 	private int focusK = -2;
 	private long focusStartMs = 0;
 	private float focusFromX, focusFromY, focusFromZoom;
-	private static final long FOCUS_MS = 900; // smooth flight duration
+	private float focusZoom = 1f;
+	private float focusOffX = 0, focusOffY = 0;
+	private static final float FOCUS_MAX_OFF = 160f;
+	private static final long FOCUS_MS = 900;
 	private static final float PLANET_FOCUS_ZOOM = 1.5f;
+	private static final float SUN_FOCUS_ZOOM = 1.0f;
+	private static final float FOCUS_MIN_ZOOM = 0.65f;
 
-	// planet-only view when zoomed far out
-	private static final float PLANET_VIEW_ZOOM = 0.45f;
-	private boolean planetView = false;
+	
+	private float focusMaxOff() {
+		if (layout == null)
+			return FOCUS_MAX_OFF;
+		float margin = 0.5f;
+		if (focusK == -1 && layout.mainRings > 0)
+			return (layout.mainRings + margin) * TreeLayout.RING_STEP * zoom;
+		if (focusK == -3 && layout.aeroRings > 0)
+			return (layout.aeroRings + margin) * TreeLayout.RING_STEP * zoom;
+		if (focusK >= 0 && focusK < layout.planetRings.length && layout.planetRings[focusK] > 0)
 
-	// smooth open/close animation
+			return Math.max(80f, (layout.planetRings[focusK] + 0.3f) * TreeLayout.PLANET_STEP * zoom);
+		return FOCUS_MAX_OFF;
+	}
+
+
 	private static final long OPEN_MS = 450;
 	private static final long CLOSE_MS = 260;
 	private boolean opening = true;
@@ -125,7 +143,7 @@ public class SkillTreeScreen extends Screen {
 
 	private void rebuild() {
 		nodes.clear();
-		// config order == server order (LinkedHashMap order of the tree)
+
 		List<SkillEntry> ordered = List.copyOf(ClientData.tree().values());
 		for (SkillEntry e : ordered) {
 			net.minecraft.world.item.Item item = BuiltInRegistries.ITEM.get(e.item());
@@ -140,34 +158,58 @@ public class SkillTreeScreen extends Screen {
 		for (int k = 0; k < planetNames.length; k++)
 			planetNames[k] = Component.translatable("branch.createtree." + layout.planetIds[k]);
 
-		// slot 0 = Sun core (root at origin); node i lives at slot i+1
-		worldX = new float[total + 1];
-		worldY = new float[total + 1];
-		scrX = new float[total + 1];
-		scrY = new float[total + 1];
 
-		// parents once; shift entry indices into slot space (root = slot 0)
+		int slots = total + 2;
+		worldX = new float[slots];
+		worldY = new float[slots];
+		scrX = new float[slots];
+		scrY = new float[slots];
+
+
 		parents = new int[total][];
 		for (int i = 0; i < total; i++) {
 			int[] src = layout.parents[i];
 			parents[i] = new int[src == null ? 0 : src.length];
 			for (int k = 0; k < parents[i].length; k++)
-				parents[i][k] = src[k] + 1; // -1 (Sun root) -> 0; entry j -> j+1
+				parents[i][k] = src[k] == -2 ? total + 1 : src[k] + 1;
 		}
 
 		stUnlocked = new boolean[total];
 		stParentsOk = new boolean[total];
 		stAffordable = new boolean[total];
+		branchComplete = new boolean[layout.planetIds.length];
+
+
+		planetNodes = new int[layout.planetIds.length][];
+		for (int k = 0; k < planetNodes.length; k++) {
+			List<Integer> list = new ArrayList<>();
+			for (int i = 0; i < total; i++)
+				if (layout.entryPlanet[i] == k)
+					list.add(i);
+			planetNodes[k] = list.stream().mapToInt(Integer::intValue).toArray();
+		}
+	}
+
+	
+	private int[][] planetNodes = new int[0][];
+
+	
+	private int aeroSlot() {
+		return nodes.size() + 1;
+	}
+
+	
+	private int maxSlot() {
+		return nodes.size() + (layout.aeroPresent ? 1 : 0);
 	}
 
 	private void seedStars() {
-		// normalized screen-space positions (0..1); parallax is applied at draw time
+
 		Random rnd = new Random(20260908L);
 		for (int i = 0; i < STAR_COUNT; i++)
 			stars.add(new float[] { rnd.nextFloat(), rnd.nextFloat(), 0.5f + rnd.nextFloat() * 1.4f, rnd.nextFloat() });
 	}
 
-	// ------------------------------------------------------------ transforms
 
 	private float sx(float wxv) {
 		return wxv * zoom + panX;
@@ -182,7 +224,6 @@ public class SkillTreeScreen extends Screen {
 		panY = height / 2f;
 	}
 
-	// ------------------------------------------------------------ blur off
 
 	@Override
 	public void renderBackground(GuiGraphics gui, int mouseX, int mouseY, float partialTick) {
@@ -196,7 +237,6 @@ public class SkillTreeScreen extends Screen {
 	public void renderTransparentBackground(GuiGraphics gui) {
 	}
 
-	// ------------------------------------------------------------ render
 
 	@Override
 	public void render(GuiGraphics gui, int mouseX, int mouseY, float partialTick) {
@@ -204,13 +244,27 @@ public class SkillTreeScreen extends Screen {
 		if (openStartMs < 0)
 			openStartMs = now;
 
-		// open/close fade factor: 0..1
+
+		if (phase == -1) {
+			phase = ClientData.sunIgnited() ? 2 : 0;
+			if (phase == 0) {
+				zoom = INTRO_ZOOM;
+				centerView();
+			}
+		}
+		if (phase == 0 && ClientData.sunIgnited()) {
+
+			phase = 1;
+			birthStartMs = now;
+		}
+
+
 		float fade;
 		if (closing) {
 			fade = 1f - Mth.clamp((now - closeStartMs) / (float) CLOSE_MS, 0f, 1f);
 		} else {
 			float t = Mth.clamp((now - openStartMs) / (float) OPEN_MS, 0f, 1f);
-			fade = 1 - (1 - t) * (1 - t); // ease-out
+			fade = 1 - (1 - t) * (1 - t);
 		}
 
 		gui.fillGradient(0, 0, width, height, SKY_TOP, SKY_BOT);
@@ -219,48 +273,135 @@ public class SkillTreeScreen extends Screen {
 			centered = true;
 		}
 
+
+		if (phase == 0) {
+			drawStars(gui, now);
+			drawWrenchIntro(gui, mouseX, mouseY, now);
+
+			super.render(gui, mouseX, mouseY, partialTick);
+			if (fade < 1f)
+				gui.fill(0, 0, width, height, ((int) ((1f - fade) * 255) << 24) | 0x030509);
+			if (closing && now - closeStartMs >= CLOSE_MS) {
+				closing = false;
+				super.onClose();
+			}
+			return;
+		}
+
+
+		if (phase == 1) {
+			float t = Mth.clamp((now - birthStartMs) / (float) BIRTH_MS, 0f, 1f);
+
+			hudAlpha = Mth.clamp((t - 0.5f) / 0.5f, 0f, 1f);
+			float ease = 1 - (1 - t) * (1 - t) * (1 - t);
+			sunGrow = Mth.clamp(t / 0.45f, 0f, 1f);
+			planetFly = Mth.clamp((t - 0.25f) / 0.45f, 0f, 1f);
+			nodeGrow = Mth.clamp((t - 0.55f) / 0.45f, 0f, 1f);
+			zoom = INTRO_ZOOM + (1f - INTRO_ZOOM) * ease;
+			panX = width / 2f;
+			panY = height / 2f;
+			if (t >= 1f) {
+				phase = 2;
+				sunGrow = 1f;
+				planetFly = 1f;
+				nodeGrow = 1f;
+				zoom = 1f;
+				setFocus(-1);
+				if (hintShownSince < 0)
+					hintShownSince = Util.getMillis();
+			}
+		} else {
+			sunGrow = 1f;
+			planetFly = 1f;
+			nodeGrow = 1f;
+
+			if (phase == 2) {
+				hudAlpha = Math.min(1f, hudAlpha + partialTick / 6f);
+				if (hintShownSince < 0)
+					hintShownSince = Util.getMillis();
+			}
+		}
+
 		updateFrameState();
 		applyFocus(now);
-		planetView = zoom < PLANET_VIEW_ZOOM && focusK < 0;
+		boolean focused = focusK >= -3 && focusK != -2;
+
+		int hoverBody = (!focused && phase == 2) ? bodyAt(mouseX, mouseY) : -2;
 
 		drawStars(gui, now);
 
-		int hovered = -2; // -2 none, -1 root, >=0 node index
-		if (planetView) {
-			// far view: orbit tracks, the Sun and planets with names - no nodes, links or sun mesh
-			drawOrbitTracks(gui);
-			drawSun(gui, now);
-			drawPlanetsOnly(gui);
-			int k = planetAt(mouseX, mouseY);
-			if (k >= 0)
-				gui.renderTooltip(font, Component.translatable("branch.createtree." + layout.planetIds[k]), mouseX, mouseY);
-		} else {
-			drawOrbits(gui);
-			drawBodies(gui, now);
-			drawLinks(gui);
 
-			for (int slot = 0; slot <= nodes.size(); slot++) {
-				boolean hov = overSlot(mouseX, mouseY, slot);
-				drawMedallion(gui, slot, hov, now);
-				if (hov)
-					hovered = slot - 1;
+		drawOrbitTracks(gui);
+		drawSun(gui, now);
+		if (hoverBody == -1)
+			drawSunHover(gui);
+		if (layout.aeroPresent) {
+			drawAeroSun(gui, now);
+			if (hoverBody == -3)
+				drawAeroSunHover(gui);
+		}
+		drawPlanetsOnly(gui, hoverBody);
+
+		drawConstellations(gui, now);
+
+		int hovered = -2;
+		if (focused) {
+
+			if (phase == 2 || planetFly > 0)
+				drawOrbits(gui);
+			if (nodeGrow > 0) {
+				drawLinks(gui, focusK);
+				for (int slot = 0; slot <= maxSlot(); slot++) {
+					if (!slotInFocus(slot))
+						continue;
+					boolean hov = overSlot(mouseX, mouseY, slot);
+					drawMedallion(gui, slot, hov && phase == 2, now);
+					if (hov)
+						hovered = slot == aeroSlot() ? -3 : slot - 1;
+				}
+
+				if (phase == 2)
+					drawBadges(gui);
 			}
 
+			if (phase == 1 && sunGrow < 1f)
+				drawWrenchShrink(gui, now);
 			drawSparks(gui, now);
+		} else if (phase == 1) {
+
+			if (nodeGrow > 0) {
+				drawLinks(gui, -1);
+				for (int slot = 0; slot <= maxSlot(); slot++) {
+					boolean hov = false;
+					drawMedallion(gui, slot, hov, now);
+				}
+			}
+			if (phase == 1 && sunGrow < 1f)
+				drawWrenchShrink(gui, now);
 		}
 
-		drawHud(gui);
+
+		drawPlanetLabels(gui, hoverBody);
+
+
+		if (hudAlpha > 0.001f)
+			drawHud(gui, hudAlpha);
+
 		super.render(gui, mouseX, mouseY, partialTick);
 
-		// tooltips above widgets, hidden during the fade
-		if (!planetView && fade >= 0.999f && !closing) {
-			if (hovered == -1)
-				gui.renderTooltip(font, Component.translatable("screen.createtree.root"), mouseX, mouseY);
-			else if (hovered >= 0)
-				renderNodeTooltip(gui, nodes.get(hovered), hovered, mouseX, mouseY);
+
+		if (focusK >= -1 || focusK == -3) {
+			if (phase == 2 && fade >= 0.999f && !closing) {
+				if (hovered == -1)
+					gui.renderTooltip(font, Component.translatable("screen.createtree.root"), mouseX, mouseY);
+				else if (hovered == -3)
+					gui.renderTooltip(font, Component.translatable("screen.createtree.aero_root"), mouseX, mouseY);
+				else if (hovered >= 0)
+					renderNodeTooltip(gui, nodes.get(hovered), hovered, mouseX, mouseY);
+			}
 		}
 
-		// fade layer on top of everything (open/close animation)
+
 		if (fade < 1f) {
 			int a = (int) ((1f - fade) * 255) << 24;
 			gui.fill(0, 0, width, height, a | 0x030509);
@@ -275,89 +416,146 @@ public class SkillTreeScreen extends Screen {
 		detectUnlocks();
 	}
 
-	/** Planet body under the cursor (planet-only view), -1 = none. */
-	private int planetAt(double mx, double my) {
-		for (int k = 0; k < layout.planetIds.length; k++) {
-			float dx = (float) (mx - sx(planetCX[k]));
-			float dy = (float) (my - sy(planetCY[k]));
-			float r = Math.max(26 * zoom, 10);
-			if (dx * dx + dy * dy <= r * r)
-				return k;
+	
+	private void drawWrenchIntro(GuiGraphics gui, int mouseX, int mouseY, long now) {
+		int cx = width / 2;
+		int cy = height / 2;
+		float bob = 6f * Mth.sin(now / 600f);
+		float pulse = 0.5f + 0.5f * Mth.sin(now / 500f);
+
+
+		drawGlow(gui, cx, (int) (cy + bob), 54 + (int) (6 * pulse));
+
+
+		PoseStack pose = gui.pose();
+		pose.pushPose();
+		pose.translate(cx - 32, cy + bob - 32, 150);
+		pose.scale(4f, 4f, 1f);
+		gui.renderItem(rootIcon, 0, 0);
+		pose.popPose();
+
+		boolean hov = Math.hypot(mouseX - cx, mouseY - (cy + bob)) <= WRENCH_CLICK_R;
+		if (hov) {
+
+			drawSolidCircle(gui, cx, (int) (cy + bob), 50, 0xC0FFE9A0);
+			gui.renderTooltip(font, Component.translatable("screen.createtree.click_wrench"), mouseX, mouseY);
 		}
-		return -1;
+
+		gui.drawCenteredString(font, Component.translatable("screen.createtree.intro"), cx, cy + 96, 0xC8CCDD);
 	}
 
-	/** Recompute planet centers, world/screen positions and node states once per frame. */
+	private void drawGlow(GuiGraphics gui, int cx, int cy, int r) {
+
+		fillDisc(gui, cx, cy, r, 0x0CFFB040);
+		fillDisc(gui, cx, cy, (int) (r * 0.72f), 0x10FFC050);
+		fillDisc(gui, cx, cy, (int) (r * 0.48f), 0x14FFD070);
+	}
+
+	
+	private void drawWrenchShrink(GuiGraphics gui, long now) {
+		float t = 1f - sunGrow;
+		if (t <= 0.02f)
+			return;
+		int cx = Math.round(scrX[0]);
+		int cy = Math.round(scrY[0]);
+		float scale = 1f + 3f * t;
+		PoseStack pose = gui.pose();
+		pose.pushPose();
+		pose.translate(cx - 8 * scale, cy - 8 * scale, 160);
+		pose.scale(scale, scale, 1);
+		gui.renderItem(rootIcon, 0, 0);
+		pose.popPose();
+	}
+
+	
 	private void updateFrameState() {
 		int total = nodes.size();
 		long now = Util.getMillis();
 
-		// planets orbit the Sun: center positions rotate over time
+
+		float fly = phase == 1 ? planetFly : 1f;
+
 		for (int k = 0; k < layout.planetIds.length; k++) {
-			planetCX[k] = TreeLayout.planetX(layout, k, now);
-			planetCY[k] = TreeLayout.planetY(layout, k, now);
+			planetCX[k] = TreeLayout.planetX(layout, k, now) * fly;
+			planetCY[k] = TreeLayout.planetY(layout, k, now) * fly;
 		}
 		worldX[0] = 0;
 		worldY[0] = 0;
 		for (int i = 0; i < total; i++) {
 			int k = layout.entryPlanet[i];
-			if (k < 0) {
+			if (k == -2) {
+
+				worldX[i + 1] = layout.aeroCX * fly + layout.relX[i] * fly;
+				worldY[i + 1] = layout.aeroCY + layout.relY[i] * fly;
+			} else if (k < 0) {
 				worldX[i + 1] = layout.relX[i];
 				worldY[i + 1] = layout.relY[i];
 			} else {
-				worldX[i + 1] = planetCX[k] + layout.relX[i];
-				worldY[i + 1] = planetCY[k] + layout.relY[i];
+				worldX[i + 1] = planetCX[k] + layout.relX[i] * fly;
+				worldY[i + 1] = planetCY[k] + layout.relY[i] * fly;
 			}
 		}
-		// NOTE: screen coords are computed in applyFocus AFTER the camera moves this frame
+
+		if (layout.aeroPresent && worldX.length > total + 1) {
+			worldX[total + 1] = layout.aeroCX * fly;
+			worldY[total + 1] = layout.aeroCY;
+		}
 
 		int points = ClientData.points();
 		for (int i = 0; i < total; i++) {
 			stUnlocked[i] = ClientData.isUnlocked(nodes.get(i).entry.item());
-			stAffordable[i] = points >= nodes.get(i).entry.cost();
+			stAffordable[i] = points >= effectiveCost(nodes.get(i).entry);
 			boolean ok = false;
 			for (int p : parents[i])
-				if (p == 0 || stUnlocked[p - 1]) {
+				if (p == 0 || p == aeroSlot() || (p >= 1 && p <= total && stUnlocked[p - 1])) {
 					ok = true;
 					break;
 				}
 			stParentsOk[i] = ok;
 		}
+
+
+		for (int k = 0; k < planetNodes.length; k++) {
+			boolean all = planetNodes[k].length > 0;
+			for (int idx : planetNodes[k])
+				if (!stUnlocked[idx]) {
+					all = false;
+					break;
+				}
+			branchComplete[k] = all;
+		}
 	}
 
-	/**
-	 * Camera: smooth flight to the focused body, then follow it while it orbits.
-	 * focusK: -2 free (user pans), -1 Sun, k >= 0 planet k.
-	 */
+	
 	private void applyFocus(long now) {
-		if (focusK >= -1) {
-			float tx, ty;
-			float targetZoom;
-			if (focusK == -1) {
-				tx = 0;
-				ty = 0;
-				targetZoom = 1f;
-			} else {
-				tx = planetCX[focusK];
-				ty = planetCY[focusK];
-				targetZoom = PLANET_FOCUS_ZOOM;
-			}
+		if (focusK >= -3 && focusK != -2) {
+			float tx = focusCenterX();
+			float ty = focusCenterY();
 			float t = Mth.clamp((now - focusStartMs) / (float) FOCUS_MS, 0f, 1f);
-			float e = 1 - (1 - t) * (1 - t) * (1 - t); // ease-out cubic
-			zoom = focusFromZoom + (targetZoom - focusFromZoom) * e;
+			float e = 1 - (1 - t) * (1 - t) * (1 - t);
+			zoom = focusFromZoom + (focusZoom - focusFromZoom) * e;
 			panX = focusFromX + (width / 2f - tx * zoom - focusFromX) * e;
 			panY = focusFromY + (height / 2f - ty * zoom - focusFromY) * e;
-			// after the flight completes, keep the planet centered as it moves along its orbit
+
 			if (t >= 1f) {
-				zoom = targetZoom;
-				panX = width / 2f - tx * zoom;
-				panY = height / 2f - ty * zoom;
+				panX = width / 2f - tx * zoom + focusOffX;
+				panY = height / 2f - ty * zoom + focusOffY;
 			}
 		}
+
 		for (int slot = 0; slot < scrX.length; slot++) {
 			scrX[slot] = sx(worldX[slot]);
 			scrY[slot] = sy(worldY[slot]);
 		}
+	}
+
+	
+	private float focusCenterX() {
+		return focusK == -1 ? 0 : (focusK == -3 ? layout.aeroCX : planetCX[focusK]);
+	}
+
+	private float focusCenterY() {
+		return focusK == -1 ? 0 : (focusK == -3 ? layout.aeroCY : planetCY[focusK]);
 	}
 
 	private void setFocus(int k) {
@@ -366,22 +564,32 @@ public class SkillTreeScreen extends Screen {
 		focusFromX = panX;
 		focusFromY = panY;
 		focusFromZoom = zoom;
+		focusZoom = (k == -1 || k == -3) ? SUN_FOCUS_ZOOM : PLANET_FOCUS_ZOOM;
+		focusOffX = 0;
+		focusOffY = 0;
 	}
 
-	/** Body under the cursor: -2 none, -1 Sun core, k >= 0 planet body. */
+	
 	private int bodyAt(double mx, double my) {
 		for (int k = 0; k < layout.planetIds.length; k++) {
 			float dx = (float) (mx - sx(planetCX[k]));
 			float dy = (float) (my - sy(planetCY[k]));
-			float r = 24 * zoom;
+			float r = Math.max(24 * zoom, 14);
 			if (dx * dx + dy * dy <= r * r)
 				return k;
 		}
 		float dx = (float) (mx - scrX[0]);
 		float dy = (float) (my - scrY[0]);
-		float r = 34 * zoom;
+		float r = Math.max(34 * zoom, 16);
 		if (dx * dx + dy * dy <= r * r)
 			return -1;
+		if (layout.aeroPresent) {
+			float ax = (float) (mx - scrX[aeroSlot()]);
+			float ay = (float) (my - scrY[aeroSlot()]);
+			float ar = Math.max(34 * zoom, 16);
+			if (ax * ax + ay * ay <= ar * ar)
+				return -3;
+		}
 		return -2;
 	}
 
@@ -392,7 +600,7 @@ public class SkillTreeScreen extends Screen {
 			return;
 		}
 		if (now.size() == lastUnlocked.size())
-			return; // quiet frame fast path, no allocation
+			return;
 		for (int i = 0; i < nodes.size(); i++) {
 			ResourceLocation id = nodes.get(i).entry.item();
 			if (now.contains(id) && !lastUnlocked.contains(id)) {
@@ -404,47 +612,50 @@ public class SkillTreeScreen extends Screen {
 	}
 
 	private void drawStars(GuiGraphics gui, long now) {
-		float phase = now / 700f;
-		// slow parallax: stars drift with panning, wrapping around the screen edges
-		float ox = -panX * 0.15f;
-		float oy = -panY * 0.15f;
+		float starPhase = now / 700f;
+
+		float ox = -Math.round(panX) * 0.15f;
+		float oy = -Math.round(panY) * 0.15f;
 		for (float[] s : stars) {
 			int x = (int) Mth.positiveModulo(s[0] * width + ox, width);
 			int y = (int) Mth.positiveModulo(s[1] * height + oy, height);
-			float tw = 0.5f + 0.5f * Mth.sin(phase + s[3] * 12f);
+			float tw = 0.5f + 0.5f * Mth.sin(starPhase + s[3] * 12f);
 			int size = Math.max(1, Math.round(s[2] * (0.7f + 0.3f * tw)));
 			int color = ((int) (120 + 135 * tw) << 24) | (STAR & 0x00FFFFFF);
 			gui.fill(x, y, x + size, y + size, color);
 		}
 	}
 
+	
 	private void drawOrbits(GuiGraphics gui) {
 		if (nodes.isEmpty())
 			return;
-		int cx = Math.round(scrX[0]);
-		int cy = Math.round(scrY[0]);
 
-		// Sun rings (main branch)
-		for (int r = 1; r <= layout.mainRings; r++) {
-			int rad = Math.round(TreeLayout.RING_STEP * r * zoom);
-			if (rad < 8)
-				continue;
-			drawDashedCircle(gui, cx, cy, rad, 0xFF2A3350);
-		}
+		if (focusK == -3) {
 
-		// every planet: its OWN orbit path around the Sun (solid, visible) + local rings + name
-		for (int k = 0; k < layout.planetIds.length; k++) {
-			int orbitR = Math.round(layout.planetOrbitR[k] * zoom);
-			if (orbitR >= 8) {
-				// bright 2px orbit track, tinted with the planet's own color; gold when focused
-				int track = focusK == k ? 0xE0FFD24E : ((PLANET_PALETTE[k % PLANET_PALETTE.length] & 0x00FFFFFF) | 0xA0000000);
-				drawSolidCircle(gui, cx, cy, orbitR, track);
-				drawSolidCircle(gui, cx, cy, orbitR + 1, track & 0x60FFFFFF);
+			int cx = Math.round(scrX[aeroSlot()]);
+			int cy = Math.round(scrY[aeroSlot()]);
+			for (int r = 1; r <= layout.aeroRings; r++) {
+				int rad = Math.round(TreeLayout.RING_STEP * r * zoom);
+				if (rad < 8)
+					continue;
+				drawDashedCircle(gui, cx, cy, rad, 0xFF4A3358);
 			}
+		} else if (focusK == -1) {
 
-			int px = Math.round(sx(planetCX[k]));
-			int py = Math.round(sy(planetCY[k]));
-			for (int r = 1; r <= layout.planetRings[k]; r++) {
+			int cx = Math.round(scrX[0]);
+			int cy = Math.round(scrY[0]);
+			for (int r = 1; r <= layout.mainRings; r++) {
+				int rad = Math.round(TreeLayout.RING_STEP * r * zoom);
+				if (rad < 8)
+					continue;
+				drawDashedCircle(gui, cx, cy, rad, 0xFF2A3350);
+			}
+		} else if (focusK >= 0) {
+
+			int px = Math.round(sx(planetCX[focusK]));
+			int py = Math.round(sy(planetCY[focusK]));
+			for (int r = 1; r <= layout.planetRings[focusK]; r++) {
 				int rad = Math.round(TreeLayout.PLANET_STEP * r * zoom);
 				if (rad < 8)
 					continue;
@@ -453,69 +664,79 @@ public class SkillTreeScreen extends Screen {
 		}
 	}
 
-	/**
-	 * The Sun: warm glow + body, drawn procedurally.
-	 * Drawn in BOTH normal and planet-only views. When zoomed far out the Sun keeps a
-	 * healthy minimum size (it is the anchor of the whole system, not a node).
-	 */
+	
 	private void drawSun(GuiGraphics gui, long now) {
-		int cx = Math.round(scrX[0]);
-		int cy = Math.round(scrY[0]);
+		float cx = scrX[0];
+		float cy = scrY[0];
 		float pulse = 0.5f + 0.5f * Mth.sin(now / 900f);
-		// non-linear: full size while zoomed in, floor of 14px when far out
+
 		int sunR = zoom >= 0.5f ? Math.round(30 * zoom) : Math.round(7 + 14 * zoom);
 		sunR = Math.max(14, sunR);
-		fillDisc(gui, cx, cy, sunR + Math.round(14 * zoom), 0x14FFB040);
-		fillDisc(gui, cx, cy, sunR + Math.round(7 * zoom), 0x22FFC050);
-		fillDisc(gui, cx, cy, sunR, lerpColor(0xFFFFA030, 0xFFFFC060, pulse));
+
+		float grow = phase == 1 ? sunGrow : 1f;
+		if (grow <= 0.01f)
+			return;
+		sunR = Math.max(2, Math.round(sunR * grow));
+		int glow = Math.max(2, Math.round(14 * zoom * grow));
+		PoseStack pose = gui.pose();
+		pose.pushPose();
+		pose.translate(cx, cy, 0);
+		fillDisc(gui, 0, 0, sunR + glow, 0x14FFB040);
+		fillDisc(gui, 0, 0, sunR + Math.round(glow * 0.5f), 0x22FFC050);
+		fillDisc(gui, 0, 0, sunR, lerpColor(0xFFFFA030, 0xFFFFC060, pulse));
 		if (sunR >= 6)
-			fillDisc(gui, cx - Math.round(sunR * 0.25f), cy - Math.round(sunR * 0.25f),
+			fillDisc(gui, -Math.round(sunR * 0.25f), -Math.round(sunR * 0.25f),
 				Math.max(2, Math.round(sunR * 0.45f)), 0x50FFE0A0);
-	}
-
-	/** Planet and Sun bodies: colored spheres with atmosphere glow, highlight and names. */
-	private void drawBodies(GuiGraphics gui, long now) {
-		// --- Sun core (drawn under the root medallion)
-		drawSun(gui, now);
-
-		// --- planets
-		for (int k = 0; k < layout.planetIds.length; k++) {
-			int px = Math.round(sx(planetCX[k]));
-			int py = Math.round(sy(planetCY[k]));
-			int pr = Math.round(20 * zoom);
-			if (pr < 2)
-				continue;
-			if (px + pr * 2 < 0 || py + pr * 2 < 0 || px - pr * 2 > width || py - pr * 2 > height)
-				continue;
-
-			int base = PLANET_PALETTE[k % PLANET_PALETTE.length];
-			// atmosphere glow
-			fillDisc(gui, px, py, pr + Math.round(6 * zoom), (base & 0x00FFFFFF) | 0x18000000);
-			// body: dark limb then lit face
-			fillDisc(gui, px, py, pr, darken(base, 0.45f));
-			fillDisc(gui, px - Math.round(pr * 0.18f), py - Math.round(pr * 0.18f),
-				Math.round(pr * 0.82f), base);
-			// specular highlight toward the Sun
-			int hx = px - Math.round(pr * 0.35f * Math.signum(planetCX[k] == 0 ? 1 : planetCX[k]));
-			int hy = py - Math.round(pr * 0.35f);
-			fillDisc(gui, hx, hy, Math.max(2, Math.round(pr * 0.3f)), 0x60FFFFFF);
-			// focus marker
-			if (focusK == k)
-				drawSolidCircle(gui, px, py, pr + Math.round(9 * zoom), 0xC0FFE9A0);
-
-			// name below the body
-			if (zoom >= 0.5f) {
-				gui.drawCenteredString(font, planetNames[k], px, py + pr + Math.round(10 * zoom),
-					focusK == k ? 0xFFE9A0 : 0xC8CCDD);
-			}
-		}
+		pose.popPose();
 	}
 
 	private static final int[] PLANET_PALETTE = {
 		0xFF4A90D9, 0xFFD9834A, 0xFF6AB04A, 0xFFB04AD9, 0xFFD94A6A, 0xFF4AD9C8
 	};
 
-	/** Far view: just the orbit tracks around the Sun. */
+	
+	private void drawAeroSun(GuiGraphics gui, long now) {
+		int slot = aeroSlot();
+		if (slot >= scrX.length)
+			return;
+		int cx = Math.round(scrX[slot]);
+		int cy = Math.round(scrY[slot]);
+		float pulse = 0.5f + 0.5f * Mth.sin(now / 900f + 2f);
+		int sunR = zoom >= 0.5f ? Math.round(30 * zoom) : Math.round(7 + 14 * zoom);
+		sunR = Math.max(14, sunR);
+		float grow = phase == 1 ? sunGrow : 1f;
+		if (grow <= 0.01f)
+			return;
+		sunR = Math.max(2, Math.round(sunR * grow));
+		int glow = Math.max(2, Math.round(14 * zoom * grow));
+		fillDisc(gui, cx, cy, sunR + glow, 0x14B040FF);
+		fillDisc(gui, cx, cy, sunR + Math.round(glow * 0.5f), 0x22C060FF);
+		fillDisc(gui, cx, cy, sunR, lerpColor(0xFFA040F0, 0xFFC880FF, pulse));
+		if (sunR >= 6)
+			fillDisc(gui, cx - Math.round(sunR * 0.25f), cy - Math.round(sunR * 0.25f),
+				Math.max(2, Math.round(sunR * 0.45f)), 0x50E8C0FF);
+
+		if (zoom >= 0.5f) {
+			PoseStack pose = gui.pose();
+			pose.pushPose();
+			pose.translate(0, 0, 200);
+			gui.drawCenteredString(font, Component.translatable("branch.createtree.aeronautics"),
+				cx, cy + sunR + Math.round(10 * zoom), focusK == -3 ? 0xFFE9A0 : 0xD8C0F0);
+			pose.popPose();
+		}
+	}
+
+	private void drawAeroSunHover(GuiGraphics gui) {
+		int slot = aeroSlot();
+		if (slot >= scrX.length)
+			return;
+		int cx = Math.round(scrX[slot]);
+		int cy = Math.round(scrY[slot]);
+		int sunR = Math.max(14, zoom >= 0.5f ? Math.round(30 * zoom) : Math.round(7 + 14 * zoom));
+		drawSolidCircle(gui, cx, cy, sunR + 5, 0xE0FFFFFF);
+	}
+
+	
 	private void drawOrbitTracks(GuiGraphics gui) {
 		int cx = Math.round(scrX[0]);
 		int cy = Math.round(scrY[0]);
@@ -528,31 +749,136 @@ public class SkillTreeScreen extends Screen {
 		}
 	}
 
-	/** Far view: planets (min size so they stay visible) + names, no local node rings. */
-	private void drawPlanetsOnly(GuiGraphics gui) {
+	
+	private void drawPlanetsOnly(GuiGraphics gui, int hoverBody) {
 		for (int k = 0; k < layout.planetIds.length; k++) {
-			int px = Math.round(sx(planetCX[k]));
-			int py = Math.round(sy(planetCY[k]));
-			int pr = Math.max(4, Math.round(20 * zoom)); // never smaller than 4px
+			float px = sx(planetCX[k]);
+			float py = sy(planetCY[k]);
+			int pr = Math.max(4, Math.round(20 * zoom));
 			if (px + pr * 2 < 0 || py + pr * 2 < 0 || px - pr * 2 > width || py - pr * 2 > height)
 				continue;
 			int base = PLANET_PALETTE[k % PLANET_PALETTE.length];
-			fillDisc(gui, px, py, pr + 2, (base & 0x00FFFFFF) | 0x18000000);
-			fillDisc(gui, px, py, pr, base);
-			fillDisc(gui, px - pr / 3, py - pr / 3, Math.max(1, pr / 2), 0x40FFFFFF);
+			boolean golden = layout.planetIds[k].equals(ClientData.goldenBranch());
+			PoseStack pose = gui.pose();
+			pose.pushPose();
+			pose.translate(px, py, 0);
+			if (golden) {
+				float gp = 0.5f + 0.5f * Mth.sin(Util.getMillis() / 300f);
+				fillDisc(gui, 0, 0, pr + 6, 0x30FFD24E);
+				drawSolidCircle(gui, 0, 0, pr + 3, (int) (0x90 + 0x50 * gp) << 24 | 0xFFD24E);
+			}
+
+			if (branchComplete.length > k && branchComplete[k]) {
+				float sp = 0.5f + 0.5f * Mth.sin(Util.getMillis() / 700f + k);
+				fillDisc(gui, 0, 0, pr + 8, (int) (0x14 + 0x0A * sp) << 24 | 0xFFF2C0);
+			}
+			fillDisc(gui, 0, 0, pr + 2, (base & 0x00FFFFFF) | 0x18000000);
+			fillDisc(gui, 0, 0, pr, golden ? 0xFFFFD24E : base);
+			fillDisc(gui, -pr / 3, -pr / 3, Math.max(1, pr / 2), 0x40FFFFFF);
 			if (focusK == k)
-				drawSolidCircle(gui, px, py, pr + 4, 0xC0FFE9A0);
-			gui.drawCenteredString(font, planetNames[k], px, py + pr + 4, focusK == k ? 0xFFE9A0 : 0xC8CCDD);
+				drawSolidCircle(gui, 0, 0, pr + 4, 0xC0FFE9A0);
+
+			if (hoverBody == k)
+				drawSolidCircle(gui, 0, 0, pr + 6, 0xE0FFFFFF);
+			pose.popPose();
 		}
 	}
 
+	
+	private void drawConstellations(GuiGraphics gui, long now) {
+		for (int k = 0; k < planetNodes.length; k++) {
+			if (!branchComplete[k])
+				continue;
+			float px = sx(planetCX[k]);
+			float py = sy(planetCY[k]);
+			if (px < -300 || py < -300 || px > width + 300 || py > height + 300)
+				continue;
+
+			float scale = Mth.clamp(zoom, 0.35f, 0.55f) * 0.5f;
+			int base = PLANET_PALETTE[k % PLANET_PALETTE.length];
+			int lineColor = (base & 0x00FFFFFF) | 0x50000000;
+
+
+			for (int idx : planetNodes[k]) {
+				float x1 = px + layout.relX[idx] * scale;
+				float y1 = py + layout.relY[idx] * scale;
+				for (int p : parents[idx]) {
+					if (p == 0 || p > nodes.size())
+						continue;
+					float x0 = px + layout.relX[p - 1] * scale;
+					float y0 = py + layout.relY[p - 1] * scale;
+					drawStarLine(gui, x0, y0, x1, y1, lineColor);
+				}
+			}
+			for (int j = 0; j < planetNodes[k].length; j++) {
+				int idx = planetNodes[k][j];
+				float x = px + layout.relX[idx] * scale;
+				float y = py + layout.relY[idx] * scale;
+				drawStar(gui, Math.round(x), Math.round(y), now + j * 700L, base);
+			}
+		}
+	}
+
+	private void drawStarLine(GuiGraphics gui, float x0, float y0, float x1, float y1, int color) {
+		int steps = (int) Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+		if (steps <= 0)
+			return;
+		for (int s = 0; s <= steps; s += 2) {
+			float t = s / (float) steps;
+			int x = Math.round(x0 + (x1 - x0) * t);
+			int y = Math.round(y0 + (y1 - y0) * t);
+			if (x < 0 || y < 0 || x >= width || y >= height)
+				continue;
+			gui.fill(x, y, x + 1, y + 1, color);
+		}
+	}
+
+	
+	private void drawStar(GuiGraphics gui, int x, int y, long phase, int base) {
+		float tw = 0.6f + 0.4f * Mth.sin(phase / 500f);
+		int a = (int) (200 * tw);
+		int col = (a << 24) | 0xFFFFFF;
+		int dim = (a / 2 << 24) | (base & 0x00FFFFFF);
+
+		gui.fill(x - 3, y, x + 4, y + 1, dim);
+		gui.fill(x, y - 3, x + 1, y + 4, dim);
+
+		gui.fill(x - 1, y, x + 2, y + 1, col);
+		gui.fill(x, y - 1, x + 1, y + 2, col);
+	}
+
+	
+	private void drawPlanetLabels(GuiGraphics gui, int hoverBody) {
+		for (int k = 0; k < layout.planetIds.length; k++) {
+			float px = sx(planetCX[k]);
+			float py = sy(planetCY[k]);
+			int pr = Math.max(4, Math.round(20 * zoom));
+			if (px + pr * 2 < 0 || py + pr * 2 < 0 || px - pr * 2 > width || py - pr * 2 > height)
+				continue;
+			PoseStack pose = gui.pose();
+			pose.pushPose();
+			pose.translate(px, py, 0);
+			gui.drawCenteredString(font, planetNames[k], 0, pr + (hoverBody == k ? 8 : 4),
+				hoverBody == k ? 0xFFFFFF : (branchComplete[k] ? 0xFFE070 : (focusK == k ? 0xFFE9A0 : 0xC8CCDD)));
+			pose.popPose();
+		}
+	}
+
+	
+	private void drawSunHover(GuiGraphics gui) {
+		int cx = Math.round(scrX[0]);
+		int cy = Math.round(scrY[0]);
+		int sunR = Math.max(14, zoom >= 0.5f ? Math.round(30 * zoom) : Math.round(7 + 14 * zoom));
+		drawSolidCircle(gui, cx, cy, sunR + 5, 0xE0FFFFFF);
+	}
+
 	private void drawDashedCircle(GuiGraphics gui, int cx, int cy, int rad, int color) {
-		// cull whole circle when off-screen
+
 		if (cx + rad < 0 || cy + rad < 0 || cx - rad > width || cy - rad > height)
 			return;
 		int[][] pts = ringPoints(rad);
 		for (int i = 0; i < pts.length; i += 4) {
-			// per-point screen test: big circles are mostly off-screen while panning
+
 			int x = cx + pts[i][0], y = cy + pts[i][1];
 			if (x < 0 || y < 0 || x >= width || y >= height)
 				continue;
@@ -572,61 +898,83 @@ public class SkillTreeScreen extends Screen {
 		}
 	}
 
-	private void drawLinks(GuiGraphics gui) {
+	
+	private boolean slotInFocus(int slot) {
+		if (focusK == -2)
+			return false;
+		if (phase == 1)
+			return true;
+		if (slot == 0)
+			return focusK == -1;
+		if (layout.aeroPresent && slot == aeroSlot())
+			return focusK == -3;
+		int i = slot - 1;
+		if (focusK == -1)
+			return layout.entryPlanet[i] == -1;
+		if (focusK == -3)
+			return layout.entryPlanet[i] == -2;
+		return layout.entryPlanet[i] == focusK;
+	}
+
+	private void drawLinks(GuiGraphics gui, int focus) {
 		PoseStack pose = gui.pose();
 		for (int i = 0; i < nodes.size(); i++) {
+			if (phase == 2 && focus != -2 && !slotInFocus(i + 1))
+				continue;
 			int slot = i + 1;
+
 			float x1 = scrX[slot], y1 = scrY[slot];
 			for (int p : parents[i]) {
-				// no line from the Sun to planet ring-1 nodes: planets orbit on their own
+
 				if (p == 0 && layout.entryPlanet[i] >= 0)
 					continue;
 				float x0 = scrX[p], y0 = scrY[p];
 				if (Math.max(x0, x1) < 0 || Math.min(x0, x1) > width || Math.max(y0, y1) < 0 || Math.min(y0, y1) > height)
 					continue;
 				float dx = x1 - x0, dy = y1 - y0;
-				float len = Mth.sqrt(dx * dx + dy * dy);
-				if (len < 1)
-					continue;
-				int color = (p == 0 || stUnlocked[p - 1]) ? LINK_OPEN : LINK_LOCK;
-				// one rotated quad per link instead of ~100 pixel fills
-				pose.pushPose();
-				pose.translate(x0, y0, 0);
-				pose.mulPose(Axis.ZP.rotation((float) Mth.atan2(dy, dx)));
-				gui.fill(0, -1, Math.round(len) + 1, 1, color);
-				pose.popPose();
+
+			float len = Mth.sqrt(dx * dx + dy * dy);
+			if (len < 1)
+				continue;
+			boolean rootParent = p == 0 || (layout.aeroPresent && p == aeroSlot());
+			int color = (rootParent || (p >= 1 && p <= nodes.size() && stUnlocked[p - 1])) ? LINK_OPEN : LINK_LOCK;
+
+			pose.pushPose();
+			pose.translate(x0, y0, 0);
+			pose.mulPose(Axis.ZP.rotation((float) Mth.atan2(dy, dx)));
+			gui.fill(0, -1, Math.round(len) + 1, 1, color);
+			pose.popPose();
 			}
 		}
 	}
 
 	private void drawMedallion(GuiGraphics gui, int slot, boolean hov, long now) {
+
+		float grow = phase == 1 ? (slot == 0 ? Math.max(sunGrow, nodeGrow) : nodeGrow) : 1f;
+		if (grow <= 0.02f)
+			return;
 		float cx = scrX[slot];
 		float cy = scrY[slot];
-		float rad = NODE_R * zoom;
+		float rad = NODE_R * zoom * grow;
 		if (cx + rad < 0 || cy + rad < 0 || cx - rad > width || cy - rad > height)
 			return;
 
 		int i = slot - 1;
+		boolean isAeroRoot = layout.aeroPresent && slot == aeroSlot();
 		boolean unlocked;
 		boolean parentsOk;
 		boolean affordable;
 		ItemStack icon;
-		Category category;
-		int cost;
-		if (i < 0) {
+		if (i < 0 || isAeroRoot) {
 			unlocked = true;
 			parentsOk = true;
 			affordable = true;
-			icon = rootIcon;
-			category = null;
-			cost = 0;
+			icon = isAeroRoot ? aeroRootIcon : rootIcon;
 		} else {
 			unlocked = stUnlocked[i];
 			parentsOk = stParentsOk[i];
 			affordable = stAffordable[i];
 			icon = nodes.get(i).icon;
-			category = nodes.get(i).entry.category();
-			cost = nodes.get(i).entry.cost();
 		}
 
 		int rim;
@@ -639,49 +987,84 @@ public class SkillTreeScreen extends Screen {
 		else
 			rim = RIM_POOR;
 
-		int rcx = Math.round(cx);
-		int rcy = Math.round(cy);
 		int rr = Math.max(4, Math.round(rad));
 
-		// two cached-span discs: rim color then inner face -> a 2px rim ring
-		fillDisc(gui, rcx, rcy, rr, rim);
-		fillDisc(gui, rcx, rcy, rr - 2, MEDALLION);
+
+		PoseStack nodePose = gui.pose();
+		nodePose.pushPose();
+		nodePose.translate(cx, cy, 0);
+		fillDisc(gui, 0, 0, rr, rim);
+		fillDisc(gui, 0, 0, rr - 2, MEDALLION);
 		if (hov)
-			fillDisc(gui, rcx, rcy, rr, 0x28FFFFFF);
+			fillDisc(gui, 0, 0, rr, 0x28FFFFFF);
 
-		// icon + all badges share the disc's integer center (rcx/rcy) ->
-		// no relative drift between texture and medallion while panning
-		float iconScale = Mth.clamp(zoom, 0.55f, 2.5f);
-		if (Math.abs(iconScale - 1f) < 0.01f) {
-			gui.renderItem(icon, rcx - ICON / 2, rcy - ICON / 2);
+
+		float iconScale = Math.round(Mth.clamp(zoom, 0.75f, 2.5f) * grow * 4f) / 4f;
+		if (iconScale <= 1.01f) {
+			gui.renderItem(icon, -ICON / 2, -ICON / 2);
 		} else {
-			PoseStack pose = gui.pose();
-			pose.pushPose();
-			// integer translate: fractional offsets make the texture swim during panning
-			pose.translate(Math.round(rcx - 8 * iconScale), Math.round(rcy - 8 * iconScale), 150);
-			pose.scale(iconScale, iconScale, 1);
-			gui.renderItem(icon, 0, 0);
-			pose.popPose();
+			nodePose.translate(0, 0, 150);
+			nodePose.scale(iconScale, iconScale, 1);
+			gui.renderItem(icon, Math.round(-8f), Math.round(-8f));
 		}
+		nodePose.popPose();
 
-		if (unlocked && i >= 0) {
-			int gx = rcx + rr - 8, gy = rcy + rr - 8;
-			gui.fill(gx, gy + 2, gx + 2, gy + 4, 0xFF38B038);
-			gui.fill(gx + 2, gy + 4, gx + 4, gy + 6, 0xFF38B038);
-			gui.fill(gx + 4, gy, gx + 6, gy + 6, 0xFF38B038);
-		} else if (!parentsOk) {
-			drawPadlock(gui, rcx + Math.round(rr * 0.4f), rcy + Math.round(rr * 0.4f));
-		} else if (!unlocked && zoom >= 0.8f) {
-			String c = String.valueOf(cost);
-			int cw = font.width(c);
-			int bx = rcx + rr - cw - 2, by = rcy + rr - 9;
-			gui.fill(bx - 1, by - 1, bx + cw + 1, by + 9, 0xC0000000);
-			gui.drawString(font, c, bx, by, affordable ? 0xFFE070 : 0xFFB07070, true);
-		}
+		if (phase != 2)
+			return;
 
-		if (category != null && zoom >= 0.8f) {
-			int dx = rcx - rr + 3, dy = rcy - rr + 3;
-			gui.fill(dx, dy, dx + 3, dy + 3, categoryColor(category));
+	}
+
+	
+	private void drawBadges(GuiGraphics gui) {
+		for (int slot = 0; slot <= maxSlot(); slot++) {
+			if (!slotInFocus(slot))
+				continue;
+			float rad = NODE_R * zoom;
+			float cx = scrX[slot];
+			float cy = scrY[slot];
+			if (cx + rad < 0 || cy + rad < 0 || cx - rad > width || cy - rad > height)
+				continue;
+
+			int i = slot - 1;
+			boolean isAeroRoot = layout.aeroPresent && slot == aeroSlot();
+			if (i < 0 || isAeroRoot)
+				continue;
+
+			int rr = Math.max(4, Math.round(rad));
+			boolean unlocked = stUnlocked[i];
+			boolean parentsOk = stParentsOk[i];
+			boolean affordable = stAffordable[i];
+			Category category = nodes.get(i).entry.category();
+			int cost = effectiveCost(nodes.get(i).entry);
+
+
+			PoseStack badgePose = gui.pose();
+			badgePose.pushPose();
+			badgePose.translate(cx, cy, 200);
+
+			if (unlocked) {
+				int gx = rr - 8, gy = rr - 8;
+				gui.fill(gx, gy + 2, gx + 2, gy + 4, 0xFF38B038);
+				gui.fill(gx + 2, gy + 4, gx + 4, gy + 6, 0xFF38B038);
+				gui.fill(gx + 4, gy, gx + 6, gy + 6, 0xFF38B038);
+			} else if (!parentsOk) {
+
+				drawPadlock(gui, Math.round(rr * 0.7f), Math.round(rr * 0.7f));
+			} else if (zoom >= 0.8f) {
+				String c = String.valueOf(cost);
+				int cw = font.width(c);
+
+				int bx = Math.round(rr * 0.7f), by = Math.round(rr * 0.7f) - 4;
+				gui.fill(bx - 1, by - 1, bx + cw + 1, by + 9, 0xC0000000);
+				gui.drawString(font, c, bx, by, affordable ? 0xFFE070 : 0xFFB07070, true);
+			}
+
+			if (zoom >= 0.8f) {
+
+				int dx = -Math.round(rr * 0.7f) - 3, dy = -Math.round(rr * 0.7f) - 3;
+				gui.fill(dx, dy, dx + 3, dy + 3, categoryColor(category));
+			}
+			badgePose.popPose();
 		}
 	}
 
@@ -694,7 +1077,8 @@ public class SkillTreeScreen extends Screen {
 
 	private boolean anyParentUnlocked(int i) {
 		for (int p : parents[i])
-			if (p == 0 || ClientData.isUnlocked(nodes.get(p - 1).entry.item()))
+			if (p == 0 || (layout.aeroPresent && p == aeroSlot())
+				|| (p >= 1 && p <= nodes.size() && ClientData.isUnlocked(nodes.get(p - 1).entry.item())))
 				return true;
 		return false;
 	}
@@ -708,14 +1092,6 @@ public class SkillTreeScreen extends Screen {
 			| (int) (ab + (bb - ab) * t);
 	}
 
-	private static int darken(int c, float f) {
-		return 0xFF000000
-			| ((int) (((c >> 16) & 0xFF) * f) << 16)
-			| ((int) (((c >> 8) & 0xFF) * f) << 8)
-			| (int) ((c & 0xFF) * f);
-	}
-
-	// ------------------------------------------------------------ cached shapes
 
 	private static int[] discSpans(int r) {
 		return DISC_CACHE.computeIfAbsent(r, rad -> {
@@ -729,11 +1105,11 @@ public class SkillTreeScreen extends Screen {
 	private void fillDisc(GuiGraphics gui, int cx, int cy, int r, int color) {
 		if (r <= 0)
 			return;
-		// screen cull: discs fully outside the viewport cost nothing
+
 		if (cx + r < 0 || cy + r < 0 || cx - r > width || cy - r > height)
 			return;
 		int[] spans = discSpans(r);
-		// rows are filled 2px tall: half the fill calls, visually identical at this size
+
 		for (int dy = -r; dy <= r; dy += 2) {
 			int hw = spans[dy + r];
 			gui.fill(cx - hw, cy + dy, cx + hw + 1, cy + dy + 2, color);
@@ -742,7 +1118,7 @@ public class SkillTreeScreen extends Screen {
 
 	private static int[][] ringPoints(int r) {
 		return RING_CACHE.computeIfAbsent(r, rad -> {
-			// enough points to keep the circle continuous: ~1 point per 2px of circumference
+
 			int n = Mth.clamp((int) (Math.PI * rad), 48, 512);
 			int[][] pts = new int[n][2];
 			for (int i = 0; i < n; i++) {
@@ -793,37 +1169,94 @@ public class SkillTreeScreen extends Screen {
 		}
 	}
 
-	private void drawHud(GuiGraphics gui) {
-		gui.fill(0, 0, width, 30, 0xC0070B18);
-		gui.drawString(font, title, 8, 5, 0xFFE7C3, true);
-		gui.drawString(font, Component.translatable("screen.createtree.points", ClientData.points()), 8, 17, 0xFFE070, true);
+	
+	private int hudMode = 0;
+	
+	private float hudAlpha = 0f;
+	
+	private long hintShownSince = -1;
+	private static final long HINT_HIDE_DELAY = 5000;
+	private static final long HINT_HIDE_FADE = 800;
 
-		int exp = ClientData.exp();
-		int per = Math.max(1, ClientData.expPerPoint());
-		int barW = Math.min(200, width / 3);
-		int barX = width / 2 - barW / 2;
-		gui.fill(barX - 1, 9, barX + barW + 1, 16, 0xFF000000);
-		gui.fill(barX, 10, barX + barW, 15, 0xFF141A2E);
-		int fill = (int) (barW * Mth.clamp((float) exp / per, 0f, 1f));
-		gui.fill(barX, 10, barX + fill, 15, 0xFF7FE7A3);
-		gui.drawCenteredString(font, Component.translatable("screen.createtree.exp", exp, per), width / 2, 19, 0x9FE8B0);
+	private float hintAlpha() {
+		if (hintShownSince < 0)
+			return 1f;
+		long e = Util.getMillis() - hintShownSince;
+		if (e < HINT_HIDE_DELAY)
+			return 1f;
+		return Mth.clamp(1f - (e - HINT_HIDE_DELAY) / (float) HINT_HIDE_FADE, 0f, 1f);
+	}
 
-		// footer hint: split into two lines when it would overflow the screen width
-		Component hint = Component.translatable("screen.createtree.hint");
-		if (font.width(hint) > width - 20) {
-			gui.fill(0, height - 34, width, height, 0xC0070B18);
-			String s = hint.getString();
-			int cut = s.indexOf(" - ", s.length() / 3);
-			if (cut > 0) {
-				gui.drawCenteredString(font, s.substring(0, cut), width / 2, height - 31, 0x8A90A8);
-				gui.drawCenteredString(font, s.substring(cut + 3), width / 2, height - 21, 0x8A90A8);
-			} else {
-				gui.drawCenteredString(font, s, width / 2, height - 26, 0x8A90A8);
+
+	private int phase = -1;
+	private long birthStartMs = -1;
+	private static final long BIRTH_MS = 2200;
+	private static final float INTRO_ZOOM = 0.15f;
+	private static final int WRENCH_CLICK_R = 48;
+
+	private float sunGrow = 0f;
+	private float planetFly = 0f;
+	private float nodeGrow = 0f;
+
+
+	private void drawHud(GuiGraphics gui, float alpha) {
+
+		int aMul = (int) (alpha * 255);
+
+		if (hudMode < 2) {
+			gui.fill(0, 0, width, 30, (int) (0xC0 * alpha) << 24 | 0x070B18);
+			gui.drawString(font, title, 8, 5, mulAlpha(0xFFE7C3, aMul), true);
+			gui.drawString(font, Component.translatable("screen.createtree.points", ClientData.points()), 8, 17, mulAlpha(0xFFE070, aMul), true);
+
+			int exp = ClientData.exp();
+			int per = Math.max(1, ClientData.expPerPoint());
+			int barW = Math.min(200, width / 3);
+			int barX = width / 2 - barW / 2;
+			gui.fill(barX - 1, 9, barX + barW + 1, 16, mulAlpha(0xFF000000, aMul));
+			gui.fill(barX, 10, barX + barW, 15, mulAlpha(0xFF141A2E, aMul));
+			int fill = (int) (barW * Mth.clamp((float) exp / per, 0f, 1f));
+			gui.fill(barX, 10, barX + fill, 15, mulAlpha(0xFF7FE7A3, aMul));
+			gui.drawCenteredString(font, Component.translatable("screen.createtree.exp", exp, per), width / 2, 19, mulAlpha(0x9FE8B0, aMul));
+
+
+			ResourceLocation cItem = ClientData.contractItem();
+			if (cItem != null) {
+				ItemStack cStack = new ItemStack(BuiltInRegistries.ITEM.get(cItem));
+				int cx = width - 8;
+				int cy = 7;
+				gui.renderItem(cStack, cx - 16, cy);
+				Component line = Component.translatable("screen.createtree.contract",
+					ClientData.contractProgress(), ClientData.contractTarget(), ClientData.contractReward());
+				gui.drawString(font, line, cx - 20 - font.width(line), cy + 4, mulAlpha(0xFFD0A0, aMul), true);
 			}
-		} else {
-			gui.fill(0, height - 26, width, height, 0xC0070B18);
-			gui.drawCenteredString(font, hint, width / 2, height - 19, 0x8A90A8);
 		}
+
+
+		float hintA = hintAlpha();
+		if (hudMode < 1 && hintA > 0.01f) {
+			int ha = (int) (aMul * hintA);
+			Component hint = Component.translatable("screen.createtree.hint");
+			if (font.width(hint) > width - 20) {
+				gui.fill(0, height - 34, width, height, mulAlpha(0xC0070B18, ha));
+				String s = hint.getString();
+				int cut = s.indexOf(" - ", s.length() / 3);
+				if (cut > 0) {
+					gui.drawCenteredString(font, s.substring(0, cut), width / 2, height - 31, mulAlpha(0x8A90A8, ha));
+					gui.drawCenteredString(font, s.substring(cut + 3), width / 2, height - 21, mulAlpha(0x8A90A8, ha));
+				} else {
+					gui.drawCenteredString(font, s, width / 2, height - 26, mulAlpha(0x8A90A8, ha));
+				}
+			} else {
+				gui.fill(0, height - 26, width, height, mulAlpha(0xC0070B18, ha));
+				gui.drawCenteredString(font, hint, width / 2, height - 19, mulAlpha(0x8A90A8, ha));
+			}
+		}
+	}
+
+	
+	private static int mulAlpha(int argb, int aMul) {
+		int a = ((argb >>> 24) * aMul) / 255;
+		return (a << 24) | (argb & 0x00FFFFFF);
 	}
 
 	private void renderNodeTooltip(GuiGraphics gui, Node node, int index, int mouseX, int mouseY) {
@@ -831,17 +1264,45 @@ public class SkillTreeScreen extends Screen {
 		lines.add(node.icon.isEmpty() ? Component.literal(node.entry.item().toString()) : node.icon.getHoverName());
 		lines.add(Component.translatable("category.createtree." + node.entry.category().jsonName())
 			.withStyle(s -> s.withColor(categoryColor(node.entry.category()))));
+
+		if (!node.entry.unlocks().isEmpty()) {
+			lines.add(Component.translatable("screen.createtree.also_unlocks").withStyle(s -> s.withColor(0x9AD0FF)));
+			for (ResourceLocation uid : node.entry.unlocks()) {
+				var bonus = new net.minecraft.world.item.ItemStack(
+					net.minecraft.core.registries.BuiltInRegistries.ITEM.get(uid));
+				lines.add(Component.literal("  ").append(
+					bonus.isEmpty() ? Component.literal(uid.toString()) : bonus.getHoverName())
+					.withStyle(s -> s.withColor(0xBFD0E8)));
+			}
+		}
 		if (stUnlocked[index]) {
 			lines.add(Component.translatable("screen.createtree.unlocked").withStyle(s -> s.withColor(0x70FF70)));
+			lines.add(Component.translatable("screen.createtree.exp_per_craft", node.entry.exp())
+				.withStyle(s -> s.withColor(0x9FE8B0)));
 		} else if (!stParentsOk[index]) {
 			lines.add(Component.translatable("screen.createtree.requires_any").withStyle(s -> s.withColor(0xFF9A9A)));
 		} else {
-			lines.add(Component.translatable("screen.createtree.cost", node.entry.cost(), node.entry.exp()));
+			int special = ClientData.discountPrice(node.entry.item());
+			if (special >= 0 && special < node.entry.cost()) {
+
+				lines.add(Component.translatable("screen.createtree.cost", node.entry.cost(), node.entry.exp())
+					.withStyle(s -> s.withColor(0x7A7A7A).withStrikethrough(true)));
+				lines.add(Component.translatable("screen.createtree.special_price", special)
+					.withStyle(s -> s.withColor(0xFF8AE0)));
+			} else {
+				lines.add(Component.translatable("screen.createtree.cost", node.entry.cost(), node.entry.exp()));
+			}
 			lines.add(stAffordable[index]
 				? Component.translatable("screen.createtree.click_to_unlock").withStyle(s -> s.withColor(0xFFE070))
 				: Component.translatable("message.createtree.not_enough_points").withStyle(s -> s.withColor(0xFF7A7A)));
 		}
 		gui.renderTooltip(font, lines, Optional.empty(), mouseX, mouseY);
+	}
+
+	
+	private static int effectiveCost(SkillEntry entry) {
+		int special = ClientData.discountPrice(entry.item());
+		return special >= 0 ? special : entry.cost();
 	}
 
 	private int categoryColor(Category c) {
@@ -856,11 +1317,29 @@ public class SkillTreeScreen extends Screen {
 		Minecraft.getInstance().getSoundManager().play(SimpleSoundInstance.forUI(event, pitch));
 	}
 
-	// ------------------------------------------------------------ input
 
 	@Override
 	public boolean mouseClicked(double mouseX, double mouseY, int button) {
 		if (super.mouseClicked(mouseX, mouseY, button))
+			return true;
+
+		if (phase == 0) {
+			if (button == 0) {
+				float bob = 6f * Mth.sin(Util.getMillis() / 600f);
+				if (Math.hypot(mouseX - width / 2, mouseY - (height / 2 + bob)) <= WRENCH_CLICK_R + 8) {
+					ModNetwork.sendToServer(new IgnitePayload());
+					playSound(SoundEvents.UI_BUTTON_CLICK.value(), 1.2f);
+					if (!ClientData.sunIgnited()) {
+
+						ClientData.setSunIgnitedLocal();
+						phase = 1;
+						birthStartMs = Util.getMillis();
+					}
+				}
+			}
+			return true;
+		}
+		if (phase == 1)
 			return true;
 		if (button == 0 || button == 1 || button == 2) {
 			dragging = true;
@@ -875,61 +1354,39 @@ public class SkillTreeScreen extends Screen {
 	}
 
 	@Override
-	public boolean mouseDragged(double mouseX, double mouseY, int button, double dx, double dy) {
-		if (dragging) {
-			if (moved >= 5)
-				focusK = -2; // manual pan takes over from focus flight/follow
-			panX = (float) (dragPanX + (mouseX - dragStartX));
-			panY = (float) (dragPanY + (mouseY - dragStartY));
-			moved = Math.max(moved, Math.hypot(mouseX - dragStartX, mouseY - dragStartY));
-			return true;
-		}
-		return super.mouseDragged(mouseX, mouseY, button, dx, dy);
-	}
-
-	@Override
 	public boolean mouseReleased(double mouseX, double mouseY, int button) {
 		if (dragging && button == 0 && moved < 5) {
 			dragging = false;
-			if (planetView) {
-				// far view: clicking a planet flies to it
-				int k = planetAt(mouseX, mouseY);
-				if (k >= 0) {
-					setFocus(k);
-					playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.9f);
+			if (focusK == -2) {
+
+				int body = bodyAt(mouseX, mouseY);
+				if (body != -2) {
+					setFocus(body);
+					playSound(SoundEvents.UI_BUTTON_CLICK.value(), body < 0 ? 1.2f : 0.9f);
 				}
 				return true;
 			}
-			// nodes take priority over bodies
+
 			int idx = nodeAt(mouseX, mouseY);
-			if (idx >= 0) {
+			if (idx >= 0 && slotInFocus(idx + 1)) {
 				Node node = nodes.get(idx);
 				if (!stUnlocked[idx] && anyParentUnlocked(idx)) {
 					ModNetwork.sendToServer(new UnlockRequestPayload(node.entry.item()));
 					playSound(SoundEvents.UI_BUTTON_CLICK.value(), 1f);
-				} else if (!anyParentUnlocked(idx)) {
-					playSound(SoundEvents.VILLAGER_NO, 0.8f);
 				}
 				return true;
 			}
-			// clicking a planet body focuses (and follows) it; the Sun returns to overview
+
 			int body = bodyAt(mouseX, mouseY);
-			if (body >= -1) {
+			if (body != -2 && body != focusK) {
 				setFocus(body);
-				playSound(SoundEvents.UI_BUTTON_CLICK.value(), body == -1 ? 1.2f : 0.9f);
-				return true;
+				playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.9f);
 			}
 			return true;
 		}
 		if (dragging && button == 0 && moved >= 5) {
-			// manual pan breaks the follow
+
 			dragging = false;
-			focusK = -2;
-			return true;
-		}
-		if (button == 1) {
-			// right-click releases focus back to free camera
-			focusK = -2;
 			return true;
 		}
 		dragging = false;
@@ -944,9 +1401,48 @@ public class SkillTreeScreen extends Screen {
 	}
 
 	@Override
+	public boolean mouseDragged(double mouseX, double mouseY, int button, double dx, double dy) {
+		if (phase != 2)
+			return true;
+		if (focusK >= -3 && focusK != -2) {
+
+			float max = focusMaxOff();
+			focusOffX += (float) dx;
+			focusOffY += (float) dy;
+			float len = (float) Math.hypot(focusOffX, focusOffY);
+			if (len > max && len > 0) {
+				focusOffX *= max / len;
+				focusOffY *= max / len;
+			}
+			return true;
+		}
+		if (dragging) {
+			panX = (float) (dragPanX + (mouseX - dragStartX));
+			panY = (float) (dragPanY + (mouseY - dragStartY));
+			moved = Math.max(moved, Math.hypot(mouseX - dragStartX, mouseY - dragStartY));
+			return true;
+		}
+		return super.mouseDragged(mouseX, mouseY, button, dx, dy);
+	}
+
+	@Override
 	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-		// zooming breaks the follow: free camera from the current pose
-		focusK = -2;
+		if (phase != 2)
+			return true;
+		if (focusK >= -3 && focusK != -2) {
+
+			float oldZoom = focusZoom;
+			focusZoom = Mth.clamp(focusZoom * (scrollY > 0 ? 1.15f : 1 / 1.15f), FOCUS_MIN_ZOOM, 2.5f);
+			if (oldZoom > 0) {
+				float k = focusZoom / oldZoom;
+				focusOffX *= k;
+				focusOffY *= k;
+			}
+			zoom = focusZoom;
+			panX = width / 2f - focusCenterX() * zoom + focusOffX;
+			panY = height / 2f - focusCenterY() * zoom + focusOffY;
+			return true;
+		}
 		float old = zoom;
 		zoom = Mth.clamp(zoom * (scrollY > 0 ? 1.15f : 1 / 1.15f), 0.15f, 2.5f);
 		panX = (float) (mouseX - (mouseX - panX) * (zoom / old));
@@ -957,17 +1453,32 @@ public class SkillTreeScreen extends Screen {
 	@Override
 	public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
 		if (closing)
-			return true; // swallow input during the close animation
+			return true;
 		if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_C) {
-			setFocus(-1); // smooth flight back to the Sun overview
+			if (phase != 2)
+				return true;
+			focusK = -2;
+			zoom = 1f;
+			centerView();
+			return true;
+		}
+		if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_MINUS || keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_KP_SUBTRACT) {
+			hudMode = (hudMode + 1) % 3;
 			return true;
 		}
 		if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
-			if (focusK >= -1) {
-				focusK = -2; // first Esc frees the camera
+			if (phase != 2) {
+
+				closing = true;
+				closeStartMs = Util.getMillis();
+				playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.8f);
 				return true;
 			}
-			// second Esc: fade out, then really close
+			if (focusK >= -3 && focusK != -2) {
+				focusK = -2;
+				return true;
+			}
+
 			closing = true;
 			closeStartMs = Util.getMillis();
 			playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.8f);
@@ -982,7 +1493,7 @@ public class SkillTreeScreen extends Screen {
 			super.onClose();
 			return;
 		}
-		// any other close path (e.g. widget) also animates
+
 		closing = true;
 		closeStartMs = Util.getMillis();
 	}

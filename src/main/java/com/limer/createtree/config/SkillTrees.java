@@ -2,9 +2,6 @@ package com.limer.createtree.config;
 
 import com.limer.createtree.CreateTreeMod;
 
-/**
- * Static access to the currently loaded skill tree. Swapped atomically on reload.
- */
 public final class SkillTrees {
 
 	private SkillTrees() {

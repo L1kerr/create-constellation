@@ -15,9 +15,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 
-/**
- * Server-side progression logic: gating checks, EXP awarding, unlocking.
- */
 public final class SkillApi {
 
 	private SkillApi() {
@@ -27,10 +24,6 @@ public final class SkillApi {
 		return player.getData(ModAttachments.PROGRESS);
 	}
 
-	/**
-	 * Global gate: an item is craftable by automation when it is either
-	 * not part of the skill tree, or the tree is empty (nothing configured).
-	 */
 	public static boolean isLockedGlobal(ItemStack result) {
 		SkillTreeConfig tree = SkillTrees.get();
 		if (tree.isEmpty())
@@ -39,7 +32,6 @@ public final class SkillApi {
 		return entry != null;
 	}
 
-	/** Player-specific gate used for vanilla crafting and mechanical crafters with an owner. */
 	public static boolean isLockedFor(Player player, ItemStack result) {
 		if (player == null)
 			return isLockedGlobal(result);
@@ -59,15 +51,10 @@ public final class SkillApi {
 		return isLockedFor(player, result);
 	}
 
-	/**
-	 * Awards EXP for one craft of a gated item; converts EXP to points.
-	 * Only gated items yield EXP (crafting non-tree items gives nothing).
-	 */
 	public static void awardExpFor(Player player, ItemStack result) {
 		awardExpFor(player, result, 1);
 	}
 
-	/** Awards EXP for {@code times} crafts of a gated item in one operation (batch processing). */
 	public static void awardExpFor(Player player, ItemStack result, int times) {
 		if (player == null || player.level().isClientSide || result.isEmpty() || times <= 0)
 			return;
@@ -77,7 +64,24 @@ public final class SkillApi {
 			return;
 
 		PlayerProgress progress = progress(player);
-		progress.addExp(entry.exp() * times, tree.expPerPoint());
+
+		Contract contract = progress.contract();
+		if (!contract.isEmpty() && contract.item().equals(entry.item())) {
+			contract.addProgress(times);
+			if (contract.isComplete()) {
+				int reward = contract.reward();
+				contract.clear();
+				progress.addPoints(reward);
+				if (player instanceof ServerPlayer sp)
+					sp.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+						"message.createtree.contract_done", reward), true);
+			}
+		}
+
+		double golden = com.limer.createtree.event.WorldEvents.multiplierFor(entry.branch());
+
+		double diminish = progress.registerCrafts(entry.item(), times);
+		progress.addExp((int) Math.max(1, Math.round(entry.exp() * golden * diminish * times)), tree.expPerPoint());
 		if (player instanceof ServerPlayer serverPlayer)
 			ModNetwork.sendToPlayer(serverPlayer, new ProgressSyncPayload(progress));
 	}
@@ -89,16 +93,14 @@ public final class SkillApi {
 		awardExpFor(player, result);
 	}
 
-	/** Tries to spend points and unlock an item; syncs on success. */
 	public static boolean unlock(ServerPlayer player, ResourceLocation item) {
 		SkillTreeConfig tree = SkillTrees.get();
 		SkillEntry entry = tree.entry(item);
 		if (entry == null)
 			return false;
 		PlayerProgress progress = progress(player);
-		// tree rule: at least one radial parent (Sun/planet mesh) must be unlocked first.
-		// ring-1 nodes have parent -1 (the Sun core) and need no prerequisite.
-		List<SkillEntry> ordered = tree.all();
+
+		List<SkillEntry> ordered = tree.nodes();
 		int idx = ordered.indexOf(entry);
 		com.limer.createtree.common.TreeLayout.Layout layout = com.limer.createtree.common.TreeLayout.compute(ordered);
 		if (idx >= 0 && layout.parents[idx] != null) {
@@ -112,11 +114,24 @@ public final class SkillApi {
 			if (!anyParent)
 				return false;
 		}
-		if (progress.tryUnlock(item, entry.cost())) {
+		if (progress.tryUnlock(item, effectiveCost(entry))) {
+
+			progress.forceUnlockAll(entry.unlocks());
 			ModNetwork.sendToPlayer(player, new ProgressSyncPayload(progress));
 			return true;
 		}
 		return false;
+	}
+
+	public static int effectiveCost(SkillEntry entry) {
+		int discount = com.limer.createtree.event.WorldEvents.discountPrice(entry.item());
+		return discount >= 0 ? discount : entry.cost();
+	}
+
+	public static void ignite(ServerPlayer player) {
+		PlayerProgress progress = progress(player);
+		if (progress.ignite())
+			ModNetwork.sendToPlayer(player, new ProgressSyncPayload(progress));
 	}
 
 	public static void syncTo(ServerPlayer player) {
@@ -124,9 +139,10 @@ public final class SkillApi {
 		progress.ensureInitialized(SkillTrees.get().startingPoints());
 		ModNetwork.sendTreeTo(player);
 		ModNetwork.sendToPlayer(player, new ProgressSyncPayload(progress));
+
+		com.limer.createtree.event.WorldEvents.syncTo(player);
 	}
 
-	/** Nearest online player to a machine position — used to credit EXP to a bystander. */
 	public static Player findNearestPlayer(ServerLevel level, net.minecraft.core.BlockPos pos, double radius) {
 		Player best = null;
 		double bestDist = radius * radius;

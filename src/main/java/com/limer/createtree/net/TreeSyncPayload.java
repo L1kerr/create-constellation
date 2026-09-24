@@ -13,10 +13,6 @@ import com.limer.createtree.config.Category;
 import com.limer.createtree.config.SkillEntry;
 import com.limer.createtree.config.SkillTrees;
 
-/**
- * Server -> client: the whole skill tree definition (items, categories, costs, exp).
- * Sent on login and after a datapack reload.
- */
 public record TreeSyncPayload(int expPerPoint, List<SkillEntry> entries) implements CustomPacketPayload {
 
 	public static final CustomPacketPayload.Type<TreeSyncPayload> TYPE =
@@ -35,7 +31,11 @@ public record TreeSyncPayload(int expPerPoint, List<SkillEntry> entries) impleme
 					int cost = buf.readVarInt();
 					int exp = buf.readVarInt();
 					String branch = buf.readUtf();
-					list.add(new SkillEntry(item, category, cost, exp, branch));
+					int uCount = buf.readVarInt();
+					List<ResourceLocation> unlocks = new ArrayList<>(uCount);
+					for (int u = 0; u < uCount; u++)
+						unlocks.add(ResourceLocation.STREAM_CODEC.decode(buf));
+					list.add(new SkillEntry(item, category, cost, exp, branch, unlocks));
 				}
 				return new TreeSyncPayload(expPerPoint, list);
 			}
@@ -50,13 +50,17 @@ public record TreeSyncPayload(int expPerPoint, List<SkillEntry> entries) impleme
 					buf.writeVarInt(e.cost());
 					buf.writeVarInt(e.exp());
 					buf.writeUtf(e.branch());
+					buf.writeVarInt(e.unlocks().size());
+					for (ResourceLocation u : e.unlocks())
+						ResourceLocation.STREAM_CODEC.encode(buf, u);
 				}
 			}
 		};
 
 	public static TreeSyncPayload current() {
 		var tree = SkillTrees.get();
-		return new TreeSyncPayload(tree.expPerPoint(), tree.all());
+
+		return new TreeSyncPayload(tree.expPerPoint(), tree.nodes());
 	}
 
 	@Override

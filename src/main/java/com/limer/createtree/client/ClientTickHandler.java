@@ -9,9 +9,6 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 
-/**
- * Handles the keybind press to open the skill tree screen.
- */
 @EventBusSubscriber(modid = CreateTreeMod.MODID, value = Dist.CLIENT)
 public class ClientTickHandler {
 

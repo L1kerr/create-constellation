@@ -10,7 +10,12 @@
     "MechanicalCrafterBlockEntityMixin",
     "SawBlockEntityMixin",
     "CrushingWheelControllerBlockEntityMixin",
-    "ResultSlotMixin"
+    "ResultSlotMixin",
+    "CrafterBlockMixin",
+    "DeployerBlockEntityMixin",
+    "SandPaperPolishingRecipeMixin",
+    "BeltDeployerCallbacksMixin",
+    "SpoutBlockEntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1

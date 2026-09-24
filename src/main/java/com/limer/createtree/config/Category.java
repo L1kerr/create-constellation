@@ -1,14 +1,10 @@
 package com.limer.createtree.config;
 
-/**
- * The three unlock categories of the skill tree.
- * Each entry costs points to unlock and grants EXP when crafted.
- */
 public enum Category {
 
-	LIGHT("light", 1, 5),
-	MEDIUM("medium", 2, 12),
-	COMPLEX("complex", 3, 25);
+	LIGHT("light", 1, 2),
+	MEDIUM("medium", 2, 5),
+	COMPLEX("complex", 3, 10);
 
 	private final String jsonName;
 	private final int defaultCost;
@@ -24,12 +20,10 @@ public enum Category {
 		return jsonName;
 	}
 
-	/** Points required to unlock an item of this category unless overridden per entry. */
 	public int defaultCost() {
 		return defaultCost;
 	}
 
-	/** EXP granted per craft of this category unless overridden per entry. */
 	public int defaultExp() {
 		return defaultExp;
 	}

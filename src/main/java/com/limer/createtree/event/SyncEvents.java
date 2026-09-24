@@ -10,9 +10,6 @@ import net.neoforged.neoforge.event.OnDatapackSyncEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent.PlayerRespawnEvent;
 
-/**
- * Sends the tree definition and the player's progress on login, respawn and datapack reload.
- */
 public class SyncEvents {
 
 	@SubscribeEvent
@@ -33,5 +30,10 @@ public class SyncEvents {
 			ModNetwork.sendTreeTo(player);
 			SkillApi.syncTo(player);
 		});
+	}
+
+	@SubscribeEvent
+	public static void onRegisterCommands(final net.neoforged.neoforge.event.RegisterCommandsEvent event) {
+		com.limer.createtree.command.SkillTreeCommands.register(event.getDispatcher());
 	}
 }

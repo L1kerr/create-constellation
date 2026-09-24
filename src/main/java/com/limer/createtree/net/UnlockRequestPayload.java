@@ -7,9 +7,6 @@ import net.minecraft.resources.ResourceLocation;
 
 import com.limer.createtree.CreateTreeMod;
 
-/**
- * Client -> server: request to unlock a skill tree item.
- */
 public record UnlockRequestPayload(ResourceLocation item) implements CustomPacketPayload {
 
 	public static final CustomPacketPayload.Type<UnlockRequestPayload> TYPE =

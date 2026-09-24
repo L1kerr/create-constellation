@@ -1,25 +1,23 @@
 package com.limer.createtree.config;
 
+import java.util.List;
+
 import net.minecraft.resources.ResourceLocation;
 
-/**
- * A single gated item in the skill tree.
- *
- * @param item     the result item id (namespace:path) that is gated
- * @param category light / medium / complex
- * @param cost     skill points required to unlock
- * @param exp      EXP granted each time this item is crafted
- * @param branch   branch id; "create" is the main branch (the Sun), every other
- *                 branch is a planet orbiting it. Entries keep their config order
- *                 inside a branch, which defines the branch mesh layout.
- */
-public record SkillEntry(ResourceLocation item, Category category, int cost, int exp, String branch) {
+public record SkillEntry(ResourceLocation item, Category category, int cost, int exp, String branch,
+						 List<ResourceLocation> unlocks) {
 
 	public static final String MAIN_BRANCH = "create";
 
 	public SkillEntry {
 		if (branch == null || branch.isEmpty())
 			branch = MAIN_BRANCH;
+		if (unlocks == null)
+			unlocks = List.of();
+	}
+
+	public SkillEntry(ResourceLocation item, Category category, int cost, int exp, String branch) {
+		this(item, category, cost, exp, branch, List.of());
 	}
 
 	public static SkillEntry defaults(ResourceLocation item, Category category) {

@@ -17,11 +17,6 @@ import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
-/**
- * Gates the Mechanical Saw: if the cutting output is locked, applyRecipe is cancelled.
- * The caller still marks the inventory as processed, so the input item is pushed through
- * unchanged instead of being consumed - no items are lost.
- */
 @Mixin(value = SawBlockEntity.class, remap = false)
 public abstract class SawBlockEntityMixin extends BlockEntity {
 
@@ -48,9 +43,11 @@ public abstract class SawBlockEntityMixin extends BlockEntity {
 		if (recipes.isEmpty())
 			return;
 		int index = Math.min(recipeIndex, recipes.size() - 1);
-		Recipe<?> recipe = recipes.get(index).value();
-		ItemStack result = recipe.getResultItem(this.level.registryAccess());
-		if (GateHelper.isBlocked(this, result)) {
+		RecipeHolder<? extends Recipe<?>> holder = recipes.get(index);
+		ItemStack result = holder.value().getResultItem(this.level.registryAccess());
+
+		boolean blocked = GateHelper.isBlocked(this, result) || GateHelper.isBlockedHolder(this, holder);
+		if (blocked) {
 			ci.cancel();
 		} else {
 			int rolls = Math.max(1, inventory.getStackInSlot(0).getCount());

@@ -17,11 +17,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
-/**
- * Gates basin processing (Mechanical Mixer + Mechanical Press in basin mode):
- *  - matchBasinRecipe returns false for locked outputs, so the machine never starts the recipe.
- *  - applyBasinRecipe tail awards EXP for the produced outputs.
- */
 @Mixin(value = BasinOperatingBlockEntity.class, remap = false)
 public abstract class BasinOperatingBlockEntityMixin extends BlockEntity {
 
@@ -29,7 +24,7 @@ public abstract class BasinOperatingBlockEntityMixin extends BlockEntity {
 	protected Recipe<?> currentRecipe;
 
 	protected BasinOperatingBlockEntityMixin() {
-		super(null, null, null); // never called, required for compilation only
+		super(null, null, null);
 	}
 
 	@Inject(method = "matchBasinRecipe", at = @At("HEAD"), cancellable = true)

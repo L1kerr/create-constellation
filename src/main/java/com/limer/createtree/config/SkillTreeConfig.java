@@ -11,18 +11,13 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
-/**
- * Immutable snapshot of the loaded skill tree. Rebuilt on datapack reload.
- * Thread-safety: the INSTANCE reference is swapped atomically, readers never mutate it.
- */
 public final class SkillTreeConfig {
 
 	public static final int DEFAULT_EXP_PER_POINT = 100;
-	public static final int DEFAULT_STARTING_POINTS = 2;
+	public static final int DEFAULT_STARTING_POINTS = 1;
 
-	/** EXP required to gain one skill point. */
 	private final int expPerPoint;
-	/** Skill points every player starts with, so the economy can bootstrap. */
+
 	private final int startingPoints;
 
 	private final Map<ResourceLocation, SkillEntry> byItem;
@@ -32,7 +27,6 @@ public final class SkillTreeConfig {
 		this.expPerPoint = Math.max(1, expPerPoint);
 		this.startingPoints = Math.max(0, startingPoints);
 
-		// LinkedHashMap keeps datapack order: it defines the parent chain inside each category
 		Map<ResourceLocation, SkillEntry> items = new java.util.LinkedHashMap<>();
 		Map<Category, List<SkillEntry>> cats = new EnumMap<>(Category.class);
 		for (Category c : Category.values())
@@ -97,10 +91,17 @@ public final class SkillTreeConfig {
 		return List.copyOf(byItem.values());
 	}
 
-	/**
-	 * The prerequisite of an entry: the previous entry in the single tree chain (config order).
-	 * The very first entry has no parent (it hangs directly on the root).
-	 */
+	public List<SkillEntry> nodes() {
+		java.util.Set<ResourceLocation> grouped = new java.util.HashSet<>();
+		for (SkillEntry e : byItem.values())
+			grouped.addAll(e.unlocks());
+		List<SkillEntry> nodes = new ArrayList<>(byItem.size());
+		for (SkillEntry e : byItem.values())
+			if (!grouped.contains(e.item()))
+				nodes.add(e);
+		return Collections.unmodifiableList(nodes);
+	}
+
 	public ResourceLocation parentOf(ResourceLocation item) {
 		SkillEntry e = byItem.get(item);
 		if (e == null)
@@ -108,5 +109,20 @@ public final class SkillTreeConfig {
 		List<SkillEntry> list = List.copyOf(byItem.values());
 		int idx = list.indexOf(e);
 		return idx > 0 ? list.get(idx - 1).item() : null;
+	}
+
+	public List<ResourceLocation> groupOf(ResourceLocation item) {
+		SkillEntry e = byItem.get(item);
+		return e == null ? List.of() : e.unlocks();
+	}
+
+	public List<ResourceLocation> groupAndSelf(ResourceLocation item) {
+		SkillEntry e = byItem.get(item);
+		if (e == null)
+			return List.of();
+		java.util.List<ResourceLocation> all = new ArrayList<>(e.unlocks().size() + 1);
+		all.add(e.item());
+		all.addAll(e.unlocks());
+		return all;
 	}
 }
